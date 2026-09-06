@@ -4,6 +4,13 @@ version = "0.1.0"
 description = "Attach to a running CPython process and inspect memory, CPU, threads, asyncio tasks, stacks and GC with near-zero overhead"
 readme = "README.md"
 requires-python = ">=3.15"
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.15",
+]
 dependencies = [
     "textual>=8.0",
 ]
