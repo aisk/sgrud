@@ -17,20 +17,22 @@ major.minor version as sgrud itself.
 ## Usage
 
 ```
-sgrud PID                           one text snapshot
-sgrud PID -n 0.5                    keep printing every 0.5 s until the target exits
-sgrud PID --json                    one JSON object per line
+sgrud PID                           interactive terminal interface
 sgrud run -- python app.py          start the target as a child and inspect it
-sgrud tui PID                       interactive terminal interface
-sgrud tui run -- python app.py
 
-sgrud PID --profile 5               sample stacks for 5 s, print the hottest functions
-sgrud PID --profile 5 --mode gil    count only the thread holding the GIL
-sgrud PID --profile 5 --mode async  sample asyncio tasks instead of threads
-sgrud PID --profile 5 --folded      collapsed stacks for flamegraph.pl or speedscope
+sgrud dump PID                      one text snapshot
+sgrud dump PID -n 0.5               keep printing every 0.5 s until the target exits
+sgrud dump PID --json               one JSON object per line
+sgrud dump run -- python app.py     `run -- CMD` works in place of a pid everywhere
+
+sgrud profile PID                   sample stacks for 5 s, print the hottest functions
+sgrud profile PID -d 30 --mode gil  sample for 30 s, count only the thread holding the GIL
+sgrud profile PID --mode async      sample asyncio tasks instead of threads
+sgrud profile PID --folded          collapsed stacks for flamegraph.pl or speedscope
 ```
 
-`--no-stacks`, `--no-tasks` and `--no-gc` drop sections you do not need.
+`--no-stacks`, `--no-tasks` and `--no-gc` drop sections you do not need
+from the interface or the dump.
 
 ### Sampling modes
 

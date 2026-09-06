@@ -1,12 +1,11 @@
 """Command line interface.
 
-sgrud PID                 one text snapshot
-sgrud PID -n 0.5          keep printing snapshots every 0.5 s
-sgrud PID --json          JSON lines instead of text
-sgrud PID --profile 5     sample stacks for 5 s and print the hottest functions
+sgrud PID                     interactive terminal interface
 sgrud run -- python app.py    spawn the target as a child, then inspect it
-sgrud tui PID             interactive Textual interface
-sgrud tui run -- python app.py
+sgrud dump PID                one text snapshot
+sgrud dump PID -n 0.5         keep printing snapshots every 0.5 s
+sgrud dump PID --json         JSON lines instead of text
+sgrud profile PID -d 5        sample stacks for 5 s and print the hottest functions
 """
 
 from __future__ import annotations
@@ -17,12 +16,16 @@ import json
 import sys
 import time
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from . import __name__ as _pkg
 from .errors import SgrudError
 from .format import format_snapshot
 from .monitor import Monitor
 from .profile import MODES
+
+if TYPE_CHECKING:
+    from .sampler import Sampler
 
 
 def _add_target(parser: argparse.ArgumentParser) -> None:
@@ -39,11 +42,41 @@ def _add_sections(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-native", action="store_true", help="hide <native> marker frames")
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog=_pkg, description=__doc__.split("\n\n")[0])
-    sub = parser.add_subparsers(dest="command")
+COMMANDS = ("top", "dump", "profile")
 
-    dump = sub.add_parser("dump", help="print snapshots (default command)")
+
+def _add_mode(parser: argparse.ArgumentParser, help: str) -> None:
+    parser.add_argument(
+        "--mode",
+        choices=MODES,
+        default="wall",
+        help=help + ": every thread (wall), only the GIL holder (gil) or asyncio tasks (async)",
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=_pkg,
+        description=__doc__.split("\n\n")[0],
+        epilog="With no subcommand sgrud opens the interactive interface.",
+    )
+    sub = parser.add_subparsers(dest="command", metavar="{dump,profile}")
+
+    # The default command. No help text keeps it out of the listing, since
+    # `sgrud PID` is the documented spelling.
+    top = sub.add_parser("top")
+    _add_target(top)
+    _add_sections(top)
+    top.add_argument("-n", "--interval", type=float, default=1.0, help="refresh interval")
+    top.add_argument(
+        "--rate",
+        type=float,
+        default=100.0,
+        help="background stack samples per second for the Hotspots tab, 0 to disable",
+    )
+    _add_mode(top, "initial hotspot mode, cycle with `m` in the TUI")
+
+    dump = sub.add_parser("dump", help="print snapshots as text or JSON")
     _add_target(dump)
     _add_sections(dump)
     dump.add_argument(
@@ -56,45 +89,24 @@ def build_parser() -> argparse.ArgumentParser:
     dump.add_argument("-c", "--count", type=int, default=None, help="stop after N snapshots")
     dump.add_argument("--json", action="store_true", help="emit one JSON object per line")
     dump.add_argument("--max-frames", type=int, default=None, help="frames per thread to show")
-    dump.add_argument(
-        "--profile",
-        type=float,
-        metavar="SECONDS",
-        default=None,
-        help="sample stacks for SECONDS and print a hotspot table instead",
+
+    profile = sub.add_parser("profile", help="sample stacks and print the hottest functions")
+    _add_target(profile)
+    profile.add_argument(
+        "-d", "--duration", type=float, default=5.0, help="seconds to sample for (default 5)"
     )
-    dump.add_argument("--rate", type=float, default=200.0, help="samples per second for --profile")
-    dump.add_argument(
-        "--sort", choices=("self", "total"), default="self", help="hotspot ordering for --profile"
+    profile.add_argument("--rate", type=float, default=200.0, help="samples per second")
+    profile.add_argument(
+        "--sort", choices=("self", "total"), default="self", help="hotspot ordering"
     )
-    dump.add_argument(
-        "--mode",
-        choices=MODES,
-        default="wall",
-        help="count every thread (wall), only the GIL holder (gil) or asyncio tasks (async)",
-    )
-    dump.add_argument(
+    _add_mode(profile, "what to count")
+    profile.add_argument(
         "--folded",
         action="store_true",
-        help="with --profile, print collapsed stacks for flamegraph.pl or speedscope",
+        help="print collapsed stacks for flamegraph.pl or speedscope instead of a table",
     )
-
-    tui = sub.add_parser("tui", help="interactive terminal interface")
-    _add_target(tui)
-    _add_sections(tui)
-    tui.add_argument("-n", "--interval", type=float, default=1.0, help="refresh interval")
-    tui.add_argument(
-        "--rate",
-        type=float,
-        default=100.0,
-        help="background stack samples per second for the Hotspots tab, 0 to disable",
-    )
-    tui.add_argument(
-        "--mode",
-        choices=MODES,
-        default="wall",
-        help="initial hotspot mode, cycle with `m` in the TUI",
-    )
+    profile.add_argument("--json", action="store_true", help="emit the hotspot table as JSON")
+    profile.add_argument("--no-native", action="store_true", help="hide <native> marker frames")
     return parser
 
 
@@ -124,11 +136,6 @@ def _dump(args: argparse.Namespace) -> int:
         )
     try:
         with monitor:
-            if args.profile is not None:
-                if monitor.limited is not None:
-                    print("sgrud: --profile needs access to the target's memory", file=sys.stderr)
-                    return 1
-                return _profile(monitor, args)
             if args.interval is None:
                 # A second sample a moment later gives meaningful CPU percentages.
                 monitor.snapshot(stacks=False, tasks=False, gc=False)
@@ -163,15 +170,32 @@ def _dump(args: argparse.Namespace) -> int:
     return 0
 
 
-def _profile(monitor: Monitor, args: argparse.Namespace) -> int:
-    from .format import format_hotspots
+def _profile(args: argparse.Namespace) -> int:
     from .sampler import Sampler
 
-    sampler = Sampler(monitor, rate=args.rate, mode=args.mode)
-    with sampler:
-        deadline = time.monotonic() + args.profile
-        while time.monotonic() < deadline and sampler.exited is None:
-            time.sleep(0.05)
+    try:
+        monitor = open_monitor(args.target, args.command_argv, native_frames=not args.no_native)
+    except SgrudError as e:
+        print(f"sgrud: {e}", file=sys.stderr)
+        return 1
+    with monitor:
+        if monitor.limited is not None:
+            print(
+                f"sgrud: profiling needs access to the target's memory. {monitor.limited}",
+                file=sys.stderr,
+            )
+            return 1
+        sampler = Sampler(monitor, rate=args.rate, mode=args.mode)
+        with sampler:
+            deadline = time.monotonic() + args.duration
+            while time.monotonic() < deadline and sampler.exited is None:
+                time.sleep(0.05)
+        return _print_hotspots(monitor, sampler, args)
+
+
+def _print_hotspots(monitor: Monitor, sampler: Sampler, args: argparse.Namespace) -> int:
+    from .format import format_hotspots
+
     hot = sampler.hotspots
     if args.folded:
         try:
@@ -206,7 +230,7 @@ def _profile(monitor: Monitor, args: argparse.Namespace) -> int:
     return 0
 
 
-def _tui(args: argparse.Namespace) -> int:
+def _top(args: argparse.Namespace) -> int:
     from .tui import run_tui
 
     try:
@@ -231,14 +255,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if "--" in argv:
         cut = argv.index("--")
         argv, command_argv = argv[:cut], argv[cut + 1 :]
-    if argv and argv[0] not in {"dump", "tui", "-h", "--help"}:
-        argv.insert(0, "dump")
+    if argv and argv[0] not in {*COMMANDS, "-h", "--help"}:
+        argv.insert(0, "top")
     args = build_parser().parse_args(argv)
     args.command_argv = command_argv
-    if args.command == "tui":
-        return _tui(args)
+    if args.command == "top":
+        return _top(args)
     if args.command == "dump":
         return _dump(args)
+    if args.command == "profile":
+        return _profile(args)
     build_parser().print_help()
     return 2
 
