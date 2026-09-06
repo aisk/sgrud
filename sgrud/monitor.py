@@ -280,8 +280,16 @@ class Monitor:
                 errors["stacks"] = f"{type(e).__name__}: {e}"
 
         # Where the OS cannot name threads by the same id as the interpreter
-        # (macOS) the interpreter's own thread list is all there is.
-        tids = sorted(os_threads) if os_threads else sorted(remote)
+        # (macOS) the interpreter's own thread list is all there is. Main
+        # thread first, then the other interpreter threads, then threads the
+        # OS knows but the interpreter does not (on Windows those can have
+        # the lowest ids).
+        def order(tid: int) -> tuple[int, int]:
+            if tid not in remote:
+                return (2, tid)
+            return (0 if remote[tid][1] & ThreadStatus.MAIN_THREAD else 1, tid)
+
+        tids = sorted(os_threads or remote, key=order)
         threads: list[Thread] = []
         for tid in tids:
             tstat = os_threads.get(tid)

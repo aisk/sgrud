@@ -27,6 +27,7 @@ def test_threads_have_names_status_and_stacks(snapshot, monitor):
     assert {"busy_loop", "idle_loop"} <= set(by_frame)
     main = [t for t in snapshot.threads if t.is_main]
     assert len(main) == 1
+    assert snapshot.threads[0].is_main
     if sys.platform.startswith("linux"):
         assert main[0].tid == snapshot.process.pid  # only Linux numbers threads like pids
 
