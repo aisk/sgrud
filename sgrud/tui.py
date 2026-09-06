@@ -41,7 +41,7 @@ from .errors import ProcessExited, SgrudError
 from .format import human_bytes, human_duration, percent, short_path
 from .models import Snapshot, Task, Thread, ThreadStatus
 from .monitor import Monitor
-from .profile import CallNode, Hotspots
+from .profile import MODES, CallNode, Hotspots
 from .sampler import Sampler
 
 HISTORY = 120
@@ -421,7 +421,7 @@ class SgrudApp(App[int]):
         Binding("f", "focus_filter", "Filter"),
         Binding("s", "toggle_sort", "Sort self/total"),
         Binding("c", "clear_hotspots", "Clear samples"),
-        Binding("m", "toggle_mode", "wall/gil"),
+        Binding("m", "toggle_mode", "wall/gil/async"),
     ]
 
     #: The widget that gets focus when a tab becomes active.
@@ -627,7 +627,7 @@ class SgrudApp(App[int]):
 
     def action_toggle_mode(self) -> None:
         # Samples are not comparable across modes, so start over.
-        self.hotspots.mode = "gil" if self.hotspots.mode == "wall" else "wall"
+        self.hotspots.mode = MODES[(MODES.index(self.hotspots.mode) + 1) % len(MODES)]
         self.action_clear_hotspots()
 
     def action_clear_hotspots(self) -> None:

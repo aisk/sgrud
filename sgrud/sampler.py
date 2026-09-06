@@ -60,12 +60,19 @@ class Sampler:
     def __exit__(self, *exc) -> None:
         self.stop()
 
+    def _sample(self) -> None:
+        # The mode is read on every sample so the UI can switch it live.
+        if self.hotspots.mode == "async":
+            self.hotspots.add_tasks(self.monitor.sample_tasks())
+        else:
+            self.hotspots.add(self.monitor.sample_stacks())
+
     def _run(self) -> None:
         period = 1.0 / self.rate
         next_at = time.monotonic()
         while not self._stop.is_set():
             try:
-                stacks = self.monitor.sample_stacks()
+                self._sample()
             except ProcessExited as e:
                 self.exited = e
                 return
@@ -77,8 +84,6 @@ class Sampler:
                 # for a sampling profiler. Count it and carry on.
                 self.errors += 1
                 self.last_error = f"{type(e).__name__}: {e}"
-            else:
-                self.hotspots.add(stacks)
             next_at += period
             delay = next_at - time.monotonic()
             if delay > 0:

@@ -1,8 +1,8 @@
 import time
 
 from sgrud.format import format_hotspots
-from sgrud.models import Frame, ThreadStatus
-from sgrud.profile import Hotspots
+from sgrud.models import Awaiter, Frame, Task, ThreadStatus
+from sgrud.profile import Hotspots, task_stacks
 from sgrud.sampler import Sampler
 
 
@@ -140,3 +140,72 @@ def test_folded_output():
         "thread 2;<native> 1",
     ]
     assert hot.folded(thread=1) == ["outer (a.py);inner (a.py) 2"]
+
+
+def test_task_stacks_join_leaf_to_root():
+    root = Task(1, "root", 100, (_f("main"),))
+    branch = Task(2, "branch", 100, (_f("gather"), _f("branch")), (Awaiter(1),))
+    leaf_a = Task(3, "a", 100, (_f("sleep"), _f("leaf")), (Awaiter(2),))
+    leaf_b = Task(4, "b", 100, (_f("sleep"), _f("leaf")), (Awaiter(2),))
+    other = Task(5, "other", 200, (_f("serve"),), (Awaiter(99),))  # unknown parent
+
+    stacks = dict(task_stacks([root, branch, leaf_a, leaf_b, other]))
+    assert set(stacks) == {100, 200}  # keyed by thread; leaves only
+    names = [f.funcname for f in task_stacks([root, branch, leaf_a])[0][1]]
+    assert names == [
+        "sleep",
+        "leaf",
+        "<task a>",
+        "gather",
+        "branch",
+        "<task branch>",
+        "main",
+        "<task root>",
+    ]
+    assert [f.funcname for f in stacks[200]] == ["serve", "<task other>"]
+    assert all(f.synthetic for f in stacks[200] if f.funcname.startswith("<task"))
+
+
+def test_task_stacks_survive_cycles():
+    a = Task(1, "a", 100, (_f("a"),), (Awaiter(2),))
+    b = Task(2, "b", 100, (_f("b"),), (Awaiter(1),))
+    # Both tasks are awaited, so neither is a leaf and nothing is emitted.
+    assert task_stacks([a, b]) == []
+    c = Task(3, "c", 100, (_f("c"),), (Awaiter(1),))
+    ((tid, frames),) = task_stacks([a, b, c])
+    assert [f.funcname for f in frames] == ["c", "<task c>", "a", "<task a>", "b", "<task b>"]
+
+
+def test_hotspots_async_mode_counts_each_task():
+    hot = Hotspots("async")
+    root = Task(1, "root", 100, (_f("main"),))
+    leaves = [Task(i, f"w{i}", 100, (_f("sleep"), _f("work")), (Awaiter(1),)) for i in (2, 3)]
+    hot.add_tasks([root, *leaves])
+    hot.add_tasks([root, *leaves])
+    assert hot.samples == 2
+    assert hot.thread_ids == [100]
+    rows = {r.funcname: r for r in hot.rows(thread=100)}
+    # Two task stacks per sample, so four thread-samples in total.
+    assert rows["sleep"].self_samples == 4 and rows["sleep"].self_percent == 100.0
+    assert rows["main"].total_percent == 100.0 and rows["main"].self_samples == 0
+    assert rows["<task w2>"].total_percent == 50.0
+    tree = hot.call_tree(thread=100)
+    assert list(tree.children) == [("<task root>", "~")]
+
+
+def test_sampler_async_mode_sees_sleeping_tasks(monitor):
+    with Sampler(monitor, rate=100, mode="async") as sampler:
+        time.sleep(0.6)
+    hot = sampler.hotspots
+    assert hot.samples > 5, (hot.samples, sampler.last_error)
+    assert sampler.exited is None
+    rows = {r.funcname: r for r in hot.rows(sort="total")}
+    assert "busy_loop" not in rows
+    assert rows["sleep"].self_percent > 50
+    assert rows["leaf"].total_percent > 50
+    assert rows["<task branch-0>"].total_samples > 0
+    # main() creates the branches without awaiting them, so it is a leaf of
+    # its own next to the six sleeping leaves, roughly one stack in seven.
+    assert rows["main"].self_samples == 0
+    assert 5 < rows["main"].total_percent < 25
+    assert rows["<task Task-1>"].total_samples == rows["main"].total_samples

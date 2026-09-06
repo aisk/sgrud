@@ -15,14 +15,17 @@ from collections.abc import Hashable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 
 from .format import short_path
-from .models import Frame, Thread, ThreadStatus
+from .models import Frame, Task, Thread, ThreadStatus
 
 FunctionKey = tuple[str, str]  # (funcname, filename)
 StackKey = tuple[FunctionKey, ...]  # outermost function first
 
 #: ``wall`` counts every thread that has a Python stack. ``gil`` counts only
 #: the thread holding the GIL, which is where CPU time goes in CPython.
-MODES = ("wall", "gil")
+#: ``async`` samples asyncio tasks instead of threads: every task counts,
+#: suspended ones included, with its coroutine stack joined to the stacks of
+#: the tasks awaiting it.
+MODES = ("wall", "gil", "async")
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,11 +132,24 @@ class Hotspots:
         """Record one sample from the threads of a Snapshot."""
         self.add_frames({t.tid: t.frames for t in threads if t.frames and self._wanted(t.status)})
 
+    def add_tasks(self, tasks: Iterable[Task]) -> None:
+        """Record one sample of asyncio tasks, see :func:`task_stacks`."""
+        self.add_stacks(task_stacks(tasks))
+
     def add_frames(self, frames_by_tid: Mapping[int, tuple[Frame, ...]]) -> None:
+        self.add_stacks(frames_by_tid.items())
+
+    def add_stacks(self, stacks: Iterable[tuple[int, tuple[Frame, ...]]]) -> None:
+        """Record one sample given as ``(tid, frames)`` pairs, leaf frame first.
+
+        A thread may contribute several stacks to one sample, as it does in
+        ``async`` mode where each task is a stack of its own. Each stack
+        counts as one sample of that thread.
+        """
         with self._lock:
             self.samples += 1
             self.last_sample_at = time.monotonic()
-            for tid, frames in frames_by_tid.items():
+            for tid, frames in stacks:
                 if not frames:
                     continue
                 counts = self._threads.get(tid)
@@ -257,6 +273,38 @@ class Hotspots:
                 parts = prefix + [_folded_frame(name, filename) for name, filename in stack]
                 lines.append(f"{';'.join(parts)} {count}")
         return lines
+
+
+def task_stacks(tasks: Iterable[Task]) -> list[tuple[int, tuple[Frame, ...]]]:
+    """Join asyncio tasks into linear stacks, one per innermost task.
+
+    A task that no other task awaits through is a leaf. Its stack is its own
+    coroutine frames, a synthetic ``<task NAME>`` marker, then the frames of
+    the task awaiting it, and so on up to a root task. This mirrors what the
+    ``profiling.sampling`` module does in async-aware mode, so a flame graph
+    shows ``main -> gather -> worker`` even though the worker task runs on no
+    thread's stack. Returns ``(thread_id, frames)`` pairs, leaf frame first.
+    A task awaited by several tasks follows the first of them.
+    """
+    by_id = {t.id: t for t in tasks}
+    awaiting: set[int] = set()
+    for t in by_id.values():
+        awaiting.update(p for p in t.parent_ids if p in by_id)
+    stacks: list[tuple[int, tuple[Frame, ...]]] = []
+    for leaf in by_id.values():
+        if leaf.id in awaiting:
+            continue
+        frames: list[Frame] = []
+        seen: set[int] = set()
+        task: Task | None = leaf
+        while task is not None and task.id not in seen:
+            seen.add(task.id)
+            frames.extend(task.frames)
+            frames.append(Frame(f"<task {task.name}>", "~"))
+            parents = [by_id[p] for p in task.parent_ids if p in by_id]
+            task = parents[0] if parents else None
+        stacks.append((leaf.thread_id, tuple(frames)))
+    return stacks
 
 
 def _thread_label(tid: int, names: Mapping[int, str] | None) -> str:

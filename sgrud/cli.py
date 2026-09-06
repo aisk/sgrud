@@ -22,6 +22,7 @@ from . import __name__ as _pkg
 from .errors import SgrudError
 from .format import format_snapshot
 from .monitor import Monitor
+from .profile import MODES
 
 
 def _add_target(parser: argparse.ArgumentParser) -> None:
@@ -68,9 +69,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dump.add_argument(
         "--mode",
-        choices=("wall", "gil"),
+        choices=MODES,
         default="wall",
-        help="count every thread (wall) or only the GIL holder (gil)",
+        help="count every thread (wall), only the GIL holder (gil) or asyncio tasks (async)",
     )
     dump.add_argument(
         "--folded",
@@ -90,9 +91,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tui.add_argument(
         "--mode",
-        choices=("wall", "gil"),
+        choices=MODES,
         default="wall",
-        help="initial hotspot mode, toggle with `m` in the TUI",
+        help="initial hotspot mode, cycle with `m` in the TUI",
     )
     return parser
 

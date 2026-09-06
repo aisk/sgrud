@@ -29,6 +29,7 @@ sgrud tui run -- python app.py
 ```
 sgrud PID --profile 5            sample stacks for 5 s, print the hottest functions
 sgrud PID --profile 5 --mode gil count only the thread holding the GIL
+sgrud PID --profile 5 --mode async sample asyncio tasks, sleeping ones included
 sgrud PID --profile 5 --folded   collapsed stacks for flamegraph.pl or speedscope
 ```
 
@@ -37,7 +38,7 @@ through them, `p` pauses, `r` refreshes, `+` and `-` change the refresh
 interval, `q` quits. Focus always sits in the current tab's content, so
 the arrow keys move through the thread table, the task tree or the flame
 graph right away. On the Hotspots and Flame tabs `f` opens the thread
-filter (pick with `enter`, `esc` cancels), `m` toggles wall/gil mode and
+filter (pick with `enter`, `esc` cancels), `m` cycles wall/gil/async mode and
 `c` clears the samples, and on Hotspots `s` toggles self/total ordering.
 Both tabs are fed by one background sampler (`--rate`, default 100 Hz)
 that keeps running while you look at the other tabs, and share the thread
@@ -54,6 +55,17 @@ In wall mode every thread with a Python stack counts, so a sleeping thread
 weighs as much as a busy one. In gil mode only the GIL holder counts, which
 answers "where does the CPU time go" for CPython code.
 
+Both of those look at thread stacks, and a coroutine parked in an `await`
+is on no thread's stack, so it never shows up there. Async mode samples the
+asyncio tasks instead: each task that no other task awaits through becomes
+one stack, made of its own coroutine frames, a `<task NAME>` marker and then
+the frames of the task awaiting it, up to the root. Every task counts
+whether it is running or suspended, so this answers "what are my tasks
+waiting on" rather than where the CPU goes. Stacks are still grouped by the
+thread that owns the event loop, so the thread filter keeps working. Reading
+the task graph costs more than reading a stack, so expect a lower achieved
+rate.
+
 ## Library
 
 The TUI is only a front end. Everything comes from `Monitor`, which
@@ -62,15 +74,15 @@ returns plain frozen dataclasses:
 ```python
 from sgrud import Monitor
 
-with Monitor.attach(pid) as m:          # or Monitor.spawn(["python", "app.py"])
-    snap = m.snapshot()                  # snapshot(stacks=..., tasks=..., gc=...)
+with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
+    snap = m.snapshot()  # snapshot(stacks=..., tasks=..., gc=...)
     print(snap.process.memory.rss, snap.process.cpu_percent)
     for t in snap.threads:
         print(t.tid, t.name, t.status.describe(), t.cpu_percent, t.frames[:1])
     for task in snap.tasks:
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
     print(snap.gc[0].collections, snap.gc[0].history[:1])
-    print(snap.to_dict())                # JSON friendly
+    print(snap.to_dict())  # JSON friendly
 ```
 
 `Monitor.stream(interval)` yields snapshots until the target exits, at which
@@ -87,7 +99,7 @@ with Sampler(monitor, rate=500, mode="gil") as sampler:
     time.sleep(5)
 for row in sampler.hotspots.rows(sort="self", limit=10):
     print(row.self_percent, row.funcname, row.filename)
-tree = sampler.hotspots.call_tree()        # merged call tree, one child per thread
+tree = sampler.hotspots.call_tree()  # merged call tree, one child per thread
 print("\n".join(sampler.hotspots.folded()))  # flamegraph.pl input
 ```
 

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from . import procfs
 from .errors import AttachError, ProcessExited
-from .models import Process, Snapshot, Thread, ThreadStatus
+from .models import Process, Snapshot, Task, Thread, ThreadStatus
 from .remote import RemoteInspector, is_python_process, permission_hint
 
 
@@ -176,6 +176,23 @@ class Monitor:
         with self._lock:
             try:
                 return inspector.stacks()
+            except ProcessExited:
+                raise
+            except Exception:
+                self._check_alive()
+                raise
+
+    def sample_tasks(self) -> tuple[Task, ...]:
+        """Read only the asyncio tasks, as fast as possible.
+
+        The async-mode counterpart of :meth:`sample_stacks`. Returns an
+        empty tuple when the target has not imported asyncio. Raises
+        ProcessExited when the target is gone.
+        """
+        inspector = self._get_inspector()
+        with self._lock:
+            try:
+                return inspector.tasks(retries=1)
             except ProcessExited:
                 raise
             except Exception:
