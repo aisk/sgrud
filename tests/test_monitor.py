@@ -13,7 +13,8 @@ def test_process_section(snapshot, monitor):
     p = snapshot.process
     assert p.pid == monitor.pid
     assert p.memory.rss > 1024 * 1024
-    assert p.memory.vms >= p.memory.rss
+    if sys.platform != "win32":  # Windows reports the commit charge as vms
+        assert p.memory.vms >= p.memory.rss
     assert p.num_threads >= 3
     assert p.uptime > 0
     assert p.cpu_percent is not None and p.cpu_percent >= 0

@@ -58,7 +58,7 @@ def test_sampler_finds_busy_loop(monitor):
     assert hot.samples > 50, hot.samples
     assert sampler.exited is None
     snap = monitor.snapshot(tasks=False, gc=False)
-    busy_tid = next(t.tid for t in snap.threads if t.frames[0].funcname == "busy_loop")
+    busy_tid = next(t.tid for t in snap.threads if t.frames and t.frames[0].funcname == "busy_loop")
     top = hot.rows(thread=busy_tid)[0]
     assert top.funcname == "busy_loop"
     assert top.self_percent > 50
@@ -206,6 +206,7 @@ def test_sampler_async_mode_sees_sleeping_tasks(monitor):
     assert rows["<task branch-0>"].total_samples > 0
     # main() creates the branches without awaiting them, so it is a leaf of
     # its own next to the six sleeping leaves, roughly one stack in seven.
-    assert rows["main"].self_samples == 0
+    # It only runs to churn objects twice a second, so almost never on top.
+    assert rows["main"].self_percent < 5
     assert 5 < rows["main"].total_percent < 25
     assert rows["<task Task-1>"].total_samples == rows["main"].total_samples

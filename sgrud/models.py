@@ -143,7 +143,8 @@ class Memory:
     """Process memory figures in bytes.
 
     Fields the platform does not report are 0: macOS has only ``rss`` and
-    ``vms``, Windows lacks ``swap`` and ``shared``.
+    ``vms``, Windows lacks ``swap`` and ``shared``. On Windows ``vms`` is
+    the commit charge, which can be smaller than ``rss``.
     """
 
     rss: int

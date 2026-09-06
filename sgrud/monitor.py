@@ -85,19 +85,26 @@ class Monitor:
             monitor = cls(pid, **options)
             monitor.limited = hint
             return monitor
-        target = interpreter_pid(pid)
-        if target is None:
+        deadline = time.monotonic() + retry
+        while True:
+            target = interpreter_pid(pid)
+            if target is not None:
+                break
             try:
                 exe = osproc.exe(pid)
             except ProcessLookupError:
                 raise ProcessExited(pid) from None
+            # A launcher named python whose interpreter child has not
+            # started yet, or an interpreter that has not loaded its DLL.
+            if time.monotonic() < deadline and osproc.looks_like_python(pid):
+                time.sleep(0.05)
+                continue
             raise AttachError(
                 pid,
                 f"{exe or 'process'} does not look like a CPython interpreter",
                 "sgrud can only inspect CPython processes of the same version as itself.",
             )
         monitor = cls(target, **options)
-        deadline = time.monotonic() + retry
         while True:
             try:
                 monitor._get_inspector()  # fail early with a useful message
