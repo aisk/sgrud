@@ -11,12 +11,14 @@ auszubremsen.
 sgrud hält das Ziel nie an und instrumentiert es nicht. Es liest den
 Interpreterzustand direkt aus dem Prozessspeicher über das Modul
 `_remote_debugging` von CPython 3.15 (die Mechanik hinter dem Tachyon-Profiler
-und `python -m asyncio ps`) und kombiniert das mit `/proc` für die Speicher-
-und CPU-Abrechnung. Ein Schnappschuss der Stacks aller Threads kostet einige
-Dutzend Mikrosekunden und auf der Zielseite gar nichts.
+und `python -m asyncio ps`) und kombiniert das mit dem, was das Betriebssystem
+für die Speicher- und CPU-Abrechnung meldet. Ein Schnappschuss der Stacks aller
+Threads kostet einige Dutzend Mikrosekunden und auf der Zielseite gar nichts.
 
-Erfordert Linux und CPython 3.15 oder neuer. Das Ziel muss dieselbe
-major.minor-Version wie sgrud selbst verwenden.
+Erfordert CPython 3.15 oder neuer unter Linux, macOS oder Windows. Das Ziel
+muss dieselbe major.minor-Version wie sgrud selbst verwenden. Linux liefert
+das vollständige Bild, siehe [Plattformen](#plattformen) für das, was den
+anderen fehlt.
 
 ## Verwendung
 
@@ -110,12 +112,28 @@ tree = sampler.hotspots.call_tree()  # merged call tree, one child per thread
 print("\n".join(sampler.hotspots.folded()))  # flamegraph.pl input
 ```
 
+## Plattformen
+
+Stacks, asyncio-Tasks, GC und der Profiler stammen aus `_remote_debugging` und
+verhalten sich überall gleich. Die Prozess- und Thread-Abrechnung kommt über
+psutil vom Betriebssystem, und dort unterscheiden sich die Plattformen.
+
+- **Linux** meldet alles, einschließlich des Scheduler-Zustands jedes Threads,
+  der im wall-Modus einen Thread als auf der CPU markiert.
+- **Windows** hat Thread-Namen und CPU-Zeit pro Thread, aber keinen
+  Scheduler-Zustand, daher zeigen Threads im wall-Modus `?` statt `cpu` /
+  `idle`. Swap und gemeinsam genutzter Speicher werden nicht gemeldet.
+- **macOS** kann Betriebssystem-Threads nicht den Thread-IDs des Interpreters
+  zuordnen, daher erscheinen Threads ohne Namen und CPU-Werte, und beim
+  Speicher werden nur `rss` / `vms` gemeldet. Den Speicher eines anderen
+  Prozesses zu lesen erfordert root, führen Sie sgrud also mit `sudo` aus.
+
 ## Berechtigungen
 
-Speicher, CPU und Thread-Namen stammen aus `/proc` und funktionieren für jeden
-Prozess, der Ihnen gehört. Alles andere liest den Speicher des Ziels, was
-ptrace-Rechte erfordert, und das Standard-`kernel.yama.ptrace_scope=1` gewährt
-diese nur für Kindprozesse. Ohne sie hängt sich sgrud im eingeschränkten Modus
+Speicher, CPU und Thread-Namen stammen vom Betriebssystem und funktionieren für
+jeden Prozess, der Ihnen gehört. Alles andere liest den Speicher des Ziels.
+Unter Linux erfordert das ptrace-Rechte, und das Standard-`kernel.yama.ptrace_scope=1`
+gewährt diese nur für Kindprozesse. Ohne sie hängt sich sgrud im eingeschränkten Modus
 an und zeigt ein Banner, das erklärt, was fehlt. Um alles zu bekommen, starten
 Sie das Ziel über `sgrud run -- ...`, führen Sie sgrud mit `sudo` aus,
 gewähren Sie `CAP_SYS_PTRACE` oder lockern Sie Yama für die Sitzung:
@@ -123,6 +141,10 @@ gewähren Sie `CAP_SYS_PTRACE` oder lockern Sie Yama für die Sitzung:
 ```
 echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
 ```
+
+Unter macOS kann nur root den Speicher eines anderen Prozesses lesen, verwenden
+Sie also `sudo`. Unter Windows funktioniert jeder Prozess desselben Benutzers,
+andere erfordern einen Administrator.
 
 Übergeben Sie `require_full=True` an `Monitor.attach`, um fehlzuschlagen statt
 in den eingeschränkten Modus zu wechseln. Ein mit `-X disable-remote-debug`

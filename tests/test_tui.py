@@ -2,6 +2,7 @@ import asyncio
 from typing import cast
 
 import pytest
+from conftest import HAS_THREAD_STATS
 from textual.widgets import DataTable, Select, Static, TabbedContent, Tabs, Tree
 
 from sgrud import Monitor
@@ -19,8 +20,9 @@ async def test_tui_renders_snapshot(monitor):
         assert app.snapshot is not None
         table = app.query_one("#threads-table", DataTable)
         assert table.row_count == len(app.snapshot.threads)
-        names = {t.name for t in app.snapshot.threads}
-        assert {"busy", "idle"} <= names
+        if HAS_THREAD_STATS:
+            names = {t.name for t in app.snapshot.threads}
+            assert {"busy", "idle"} <= names
 
         stack = app.query_one("#thread-stack", StackPanel)
         assert stack.last_title.startswith("[")
@@ -186,7 +188,8 @@ async def test_tui_flame_tab(monitor):
         names = {c.node.name for c in cells}
         assert "busy_loop" in names
         threads = [c for c in cells if c.node.tid is not None]
-        assert any(c.node.name.startswith("busy [") for c in threads)
+        if HAS_THREAD_STATS:
+            assert any(c.node.name.startswith("busy [") for c in threads)
         assert all(c.width >= 1 for c in cells)
 
         # Walk up from the root into the widest thread, then zoom in on it.
@@ -203,7 +206,9 @@ async def test_tui_flame_tab(monitor):
 
         # The thread filter is shared with the Hotspots tab.
         assert app.snapshot is not None
-        busy = next(t.tid for t in app.snapshot.threads if t.name == "busy")
+        busy = next(
+            t.tid for t in app.snapshot.threads if t.frames and t.frames[0].funcname == "busy_loop"
+        )
         app.query_one("#flame-filter", Select).value = busy
         await pilot.pause()
         assert app.hot_thread == busy

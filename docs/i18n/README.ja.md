@@ -10,11 +10,13 @@ sgrud (スコットランド・ゲール語の *sgrùd* に由来し、「検査
 sgrud は対象を停止させることも、計装することもありません。CPython 3.15 の
 `_remote_debugging` モジュール (Tachyon プロファイラや `python -m asyncio ps`
 を支える仕組み) を通じてインタープリタの状態をプロセスメモリから直接読み取り、
-メモリと CPU の計測には `/proc` を組み合わせます。全スレッドのスタックの
-スナップショットは数十マイクロ秒で取得でき、対象側のコストはゼロです。
+メモリと CPU の計測には OS が報告する情報を組み合わせます。全スレッドの
+スタックのスナップショットは数十マイクロ秒で取得でき、対象側のコストはゼロです。
 
-Linux と CPython 3.15 以降が必要です。対象は sgrud 自身と同じ major.minor
-バージョンで動作している必要があります。
+CPython 3.15 以降が必要で、Linux、macOS、Windows で動作します。対象は sgrud
+自身と同じ major.minor バージョンで動作している必要があります。Linux では
+すべての情報が得られます。他のプラットフォームとの違いは
+[プラットフォーム](#プラットフォーム) を参照してください。
 
 ## 使い方
 
@@ -107,12 +109,28 @@ tree = sampler.hotspots.call_tree()  # merged call tree, one child per thread
 print("\n".join(sampler.hotspots.folded()))  # flamegraph.pl input
 ```
 
+## プラットフォーム
+
+スタック、asyncio タスク、GC、プロファイラは `_remote_debugging` から取得
+するため、どこでも同じように動作します。プロセスとスレッドの計測は psutil を
+通じて OS から取得しており、プラットフォームごとの違いはここにあります。
+
+- **Linux** はスレッドごとのスケジューラ状態を含むすべてを報告します。wall
+  モードでスレッドが CPU 上にあるかどうかを示すのはこの状態です。
+- **Windows** にはスレッド名とスレッドごとの CPU 時間がありますが、スケジューラ
+  状態はありません。そのため wall モードではスレッドが `cpu` / `idle` ではなく
+  `?` と表示されます。swap と共有メモリは報告されません。
+- **macOS** では OS のスレッドをインタープリタのスレッド ID と対応付けられない
+  ため、スレッドは名前と CPU の数値なしで表示され、メモリは `rss` / `vms` のみ
+  です。他のプロセスのメモリを読むには root が必要なので、sgrud は `sudo` で
+  実行してください。
+
 ## 権限
 
-メモリ、CPU、スレッド名は `/proc` から取得するため、自分が所有する任意の
-プロセスで動作します。それ以外はすべて対象のメモリを読み取るため ptrace の
-権限が必要ですが、デフォルトの `kernel.yama.ptrace_scope=1` では子プロセスに
-対してしか許可されません。権限がない場合、sgrud は制限モードでアタッチし、
+メモリ、CPU、スレッド名は OS から取得するため、自分が所有する任意の
+プロセスで動作します。それ以外はすべて対象のメモリを読み取ります。Linux では
+ptrace の権限が必要ですが、デフォルトの `kernel.yama.ptrace_scope=1` では
+子プロセスに対してしか許可されません。権限がない場合、sgrud は制限モードでアタッチし、
 何が不足しているかを説明するバナーを表示します。すべての機能を使うには、
 対象を `sgrud run -- ...` で起動する、sgrud を `sudo` で実行する、
 `CAP_SYS_PTRACE` を付与する、またはセッション中だけ Yama を緩和してください。
@@ -120,6 +138,10 @@ print("\n".join(sampler.hotspots.folded()))  # flamegraph.pl input
 ```
 echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
 ```
+
+macOS では root だけが他のプロセスのメモリを読めるため、`sudo` を使って
+ください。Windows では同じユーザーのプロセスならそのまま動作し、他のユーザーの
+プロセスには管理者権限が必要です。
 
 `Monitor.attach` に `require_full=True` を渡すと、機能を落とす代わりに
 失敗するようになります。`-X disable-remote-debug` で起動した対象も調べられます。

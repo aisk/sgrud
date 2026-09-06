@@ -12,11 +12,13 @@ and garbage collector without slowing it down.
 sgrud never stops or instruments the target. It reads interpreter state
 straight out of process memory through CPython 3.15's `_remote_debugging`
 module (the machinery behind the Tachyon profiler and `python -m asyncio ps`)
-and pairs it with `/proc` for memory and CPU accounting. A snapshot of every
-thread's stack costs tens of microseconds and nothing on the target side.
+and pairs it with what the OS reports for memory and CPU accounting. A
+snapshot of every thread's stack costs tens of microseconds and nothing on
+the target side.
 
-Requires Linux and CPython 3.15 or newer. The target must run the same
-major.minor version as sgrud itself.
+Requires CPython 3.15 or newer on Linux, macOS or Windows. The target must
+run the same major.minor version as sgrud itself. Linux gets the full
+picture, see [Platforms](#platforms) for what the others lack.
 
 ## Usage
 
@@ -107,19 +109,38 @@ tree = sampler.hotspots.call_tree()  # merged call tree, one child per thread
 print("\n".join(sampler.hotspots.folded()))  # flamegraph.pl input
 ```
 
+## Platforms
+
+Stacks, asyncio tasks, GC and the profiler come from `_remote_debugging`
+and behave the same everywhere. Process and thread accounting comes from
+the OS through psutil, and that is where the platforms differ.
+
+- **Linux** reports everything, including per-thread scheduler state,
+  which is what marks a thread as on CPU in wall mode.
+- **Windows** has thread names and per-thread CPU time but no scheduler
+  state, so threads read as `?` instead of `cpu` / `idle` in wall mode.
+  Swap and shared memory are not reported.
+- **macOS** cannot match OS threads to the interpreter's thread ids, so
+  threads show without names or CPU figures and only `rss` / `vms` are
+  reported for memory. Reading another process's memory needs root, so
+  run sgrud with `sudo`.
+
 ## Permissions
 
-Memory, CPU and thread names come from `/proc` and work for any process
-you own. Everything else reads the target's memory, which needs ptrace
-rights, and the default `kernel.yama.ptrace_scope=1` only grants those for
-child processes. Without them sgrud attaches in limited mode and shows a
-banner explaining what is missing. To get everything, start the target
-through `sgrud run -- ...`, run sgrud with `sudo`, grant `CAP_SYS_PTRACE`,
-or relax Yama for the session:
+Memory, CPU and thread names come from the OS and work for any process
+you own. Everything else reads the target's memory. On Linux that needs
+ptrace rights, and the default `kernel.yama.ptrace_scope=1` only grants
+those for child processes. Without them sgrud attaches in limited mode and
+shows a banner explaining what is missing. To get everything, start the
+target through `sgrud run -- ...`, run sgrud with `sudo`, grant
+`CAP_SYS_PTRACE`, or relax Yama for the session:
 
 ```
 echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
 ```
+
+On macOS only root can read another process's memory, so use `sudo`. On
+Windows any process of the same user works, others need an administrator.
 
 Pass `require_full=True` to `Monitor.attach` to fail instead of degrading.
 A target started with `-X disable-remote-debug` can still be inspected,

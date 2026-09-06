@@ -10,11 +10,12 @@ sgrud(스코틀랜드 게일어 *sgrùd*에서 유래했으며 "검사(檢査)" 
 sgrud는 대상을 멈추거나 계측 코드를 주입하지 않습니다. CPython 3.15의
 `_remote_debugging` 모듈(Tachyon 프로파일러와 `python -m asyncio ps`의 기반이 되는
 장치)을 통해 프로세스 메모리에서 인터프리터 상태를 직접 읽어 오고, 메모리와 CPU
-집계를 위해 `/proc`을 함께 사용합니다. 모든 스레드의 스택을 한 번 스냅샷하는 데
-수십 마이크로초가 들며 대상 쪽에는 아무런 비용이 없습니다.
+집계를 위해 OS가 보고하는 정보를 함께 사용합니다. 모든 스레드의 스택을 한 번
+스냅샷하는 데 수십 마이크로초가 들며 대상 쪽에는 아무런 비용이 없습니다.
 
-Linux와 CPython 3.15 이상이 필요합니다. 대상은 sgrud 자체와 같은 major.minor
-버전으로 실행되어야 합니다.
+CPython 3.15 이상이 필요하며 Linux, macOS, Windows에서 동작합니다. 대상은 sgrud
+자체와 같은 major.minor 버전으로 실행되어야 합니다. Linux에서는 모든 정보를 얻을
+수 있고, 다른 플랫폼과의 차이는 [플랫폼](#플랫폼)을 참고하십시오.
 
 ## 사용법
 
@@ -104,12 +105,27 @@ tree = sampler.hotspots.call_tree()  # merged call tree, one child per thread
 print("\n".join(sampler.hotspots.folded()))  # flamegraph.pl input
 ```
 
+## 플랫폼
+
+스택, asyncio 태스크, GC, 프로파일러는 `_remote_debugging`에서 가져오므로 어디서나
+같게 동작합니다. 프로세스와 스레드 집계는 psutil을 통해 OS에서 가져오며,
+플랫폼별 차이는 여기에 있습니다.
+
+- **Linux**는 스레드별 스케줄러 상태를 포함해 모든 것을 보고합니다. wall 모드에서
+  스레드가 CPU 위에 있는지 표시하는 것이 바로 이 상태입니다.
+- **Windows**는 스레드 이름과 스레드별 CPU 시간은 있지만 스케줄러 상태가 없어서,
+  wall 모드에서 스레드가 `cpu` / `idle` 대신 `?`로 표시됩니다. swap과 공유
+  메모리는 보고되지 않습니다.
+- **macOS**는 OS 스레드를 인터프리터의 스레드 id와 맞출 수 없으므로 스레드에
+  이름과 CPU 수치가 없고, 메모리는 `rss` / `vms`만 보고됩니다. 다른 프로세스의
+  메모리를 읽으려면 root가 필요하므로 sgrud를 `sudo`로 실행하십시오.
+
 ## 권한
 
-메모리, CPU, 스레드 이름은 `/proc`에서 가져오므로 자신이 소유한 모든 프로세스에
-대해 동작합니다. 그 외의 모든 것은 대상의 메모리를 읽으므로 ptrace 권한이
-필요한데, 기본값인 `kernel.yama.ptrace_scope=1`은 자식 프로세스에 대해서만 이
-권한을 허용합니다. 권한이 없으면 sgrud는 제한 모드로 붙고 무엇이 빠져 있는지
+메모리, CPU, 스레드 이름은 OS에서 가져오므로 자신이 소유한 모든 프로세스에
+대해 동작합니다. 그 외의 모든 것은 대상의 메모리를 읽습니다. Linux에서는 ptrace
+권한이 필요한데, 기본값인 `kernel.yama.ptrace_scope=1`은 자식 프로세스에 대해서만
+이 권한을 허용합니다. 권한이 없으면 sgrud는 제한 모드로 붙고 무엇이 빠져 있는지
 설명하는 배너를 표시합니다. 모든 기능을 사용하려면 `sgrud run -- ...`으로 대상을
 시작하거나, `sudo`로 sgrud를 실행하거나, `CAP_SYS_PTRACE`를 부여하거나, 해당
 세션 동안 Yama를 완화하십시오:
@@ -117,6 +133,10 @@ print("\n".join(sampler.hotspots.folded()))  # flamegraph.pl input
 ```
 echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
 ```
+
+macOS에서는 root만 다른 프로세스의 메모리를 읽을 수 있으므로 `sudo`를 사용하십시오.
+Windows에서는 같은 사용자의 프로세스는 그대로 동작하고, 다른 사용자의 프로세스는
+관리자 권한이 필요합니다.
 
 `Monitor.attach`에 `require_full=True`를 넘기면 기능을 축소하는 대신 실패합니다.
 `-X disable-remote-debug`로 시작된 대상도 검사할 수 있습니다. 그 플래그는 코드

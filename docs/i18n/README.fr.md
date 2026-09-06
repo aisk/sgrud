@@ -11,12 +11,15 @@ sans le ralentir.
 sgrud n'arrête ni n'instrumente jamais la cible. Il lit l'état de
 l'interpréteur directement dans la mémoire du processus grâce au module
 `_remote_debugging` de CPython 3.15 (la mécanique derrière le profileur
-Tachyon et `python -m asyncio ps`) et le combine avec `/proc` pour la
-comptabilité mémoire et CPU. Un instantané de la pile de chaque thread
-coûte quelques dizaines de microsecondes, et rien du côté de la cible.
+Tachyon et `python -m asyncio ps`) et le combine avec ce que le système
+rapporte pour la comptabilité mémoire et CPU. Un instantané de la pile de
+chaque thread coûte quelques dizaines de microsecondes, et rien du côté de
+la cible.
 
-Nécessite Linux et CPython 3.15 ou plus récent. La cible doit utiliser la
-même version majeure.mineure que sgrud lui-même.
+Nécessite CPython 3.15 ou plus récent sur Linux, macOS ou Windows. La cible
+doit utiliser la même version majeure.mineure que sgrud lui-même. Linux
+donne le tableau complet, voir [Plateformes](#plateformes) pour ce qui
+manque aux autres.
 
 ## Utilisation
 
@@ -112,12 +115,32 @@ tree = sampler.hotspots.call_tree()  # merged call tree, one child per thread
 print("\n".join(sampler.hotspots.folded()))  # flamegraph.pl input
 ```
 
+## Plateformes
+
+Les piles, les tâches asyncio, le GC et le profileur proviennent de
+`_remote_debugging` et se comportent de la même façon partout. La
+comptabilité des processus et des threads vient du système via psutil, et
+c'est là que les plateformes diffèrent.
+
+- **Linux** rapporte tout, y compris l'état d'ordonnancement de chaque
+  thread, qui sert à marquer un thread comme sur CPU en mode wall.
+- **Windows** a les noms de threads et le temps CPU par thread mais pas
+  d'état d'ordonnancement, donc en mode wall les threads affichent `?` au
+  lieu de `cpu` / `idle`. Le swap et la mémoire partagée ne sont pas
+  rapportés.
+- **macOS** ne peut pas faire correspondre les threads du système aux
+  identifiants de threads de l'interpréteur, donc les threads apparaissent
+  sans nom ni chiffres CPU et seuls `rss` / `vms` sont rapportés pour la
+  mémoire. Lire la mémoire d'un autre processus exige root, lancez donc
+  sgrud avec `sudo`.
+
 ## Permissions
 
-La mémoire, le CPU et les noms de threads proviennent de `/proc` et
+La mémoire, le CPU et les noms de threads proviennent du système et
 fonctionnent pour tout processus qui vous appartient. Tout le reste lit la
-mémoire de la cible, ce qui exige des droits ptrace, et la valeur par défaut
-`kernel.yama.ptrace_scope=1` ne les accorde que pour les processus enfants.
+mémoire de la cible. Sur Linux cela exige des droits ptrace, et la valeur
+par défaut `kernel.yama.ptrace_scope=1` ne les accorde que pour les
+processus enfants.
 Sans ces droits, sgrud s'attache en mode limité et affiche un bandeau
 expliquant ce qui manque. Pour tout obtenir, lancez la cible via
 `sgrud run -- ...`, exécutez sgrud avec `sudo`, accordez `CAP_SYS_PTRACE`,
@@ -126,6 +149,10 @@ ou assouplissez Yama pour la session :
 ```
 echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
 ```
+
+Sur macOS seul root peut lire la mémoire d'un autre processus, utilisez
+donc `sudo`. Sur Windows tout processus du même utilisateur fonctionne, les
+autres exigent un administrateur.
 
 Passez `require_full=True` à `Monitor.attach` pour échouer au lieu de se
 dégrader. Une cible lancée avec `-X disable-remote-debug` reste inspectable,

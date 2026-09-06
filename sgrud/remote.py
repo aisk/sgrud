@@ -13,7 +13,7 @@ import sys
 from collections.abc import Iterable
 from typing import Any
 
-from . import procfs
+from . import osproc
 from .errors import AttachError, NotSupported, ProcessExited
 from .models import (
     Awaiter,
@@ -114,7 +114,13 @@ def _frames(frames: Iterable[Any]) -> tuple[Frame, ...]:
 def permission_hint() -> str:
     """Explain why reading another process's memory failed and how to fix it."""
     hint = "reading the target's memory was denied."
-    scope = procfs.ptrace_scope()
+    if osproc.MACOS:
+        return hint + (
+            " macOS only lets root read another process's memory, so run sgrud with sudo."
+        )
+    if osproc.WINDOWS:
+        return hint + " Run sgrud as the same user as the target, or as administrator."
+    scope = osproc.ptrace_scope()
     if scope:
         hint += (
             f" kernel.yama.ptrace_scope is {scope}: only child processes can be "
@@ -126,6 +132,28 @@ def permission_hint() -> str:
     return hint
 
 
+def access_hint(pid: int) -> str | None:
+    """Check that the target's memory is readable. Returns why not, or None.
+
+    Anything other than a permission problem (not a Python process, still
+    starting up) counts as readable and is left for the real attach to
+    report.
+    """
+    readable = osproc.can_read_memory(pid)
+    if readable is None:
+        try:
+            _rd.RemoteUnwinder(pid)
+        except PermissionError:
+            readable = False
+        except ProcessLookupError as e:
+            raise ProcessExited(pid) from e
+        except Exception:
+            pass
+    if readable is False:
+        return permission_hint()
+    return None
+
+
 def _translate_attach_error(pid: int, exc: BaseException) -> AttachError:
     text = str(exc)
     hint = None
@@ -135,8 +163,8 @@ def _translate_attach_error(pid: int, exc: BaseException) -> AttachError:
             f"sgrud runs on Python {sys.version.split()[0]} and can only attach to "
             "a target of the same major.minor (pre-release builds must match exactly)."
         )
-    elif "PyRuntime" in text or "Permission" in type(exc).__name__:
-        if not procfs.can_read_memory(pid):
+    elif isinstance(exc, PermissionError) or "PyRuntime" in text:
+        if isinstance(exc, PermissionError) or osproc.can_read_memory(pid) is False:
             hint = permission_hint()
         else:
             hint = "is the target really a CPython process with remote debugging enabled?"
@@ -182,9 +210,7 @@ class RemoteInspector:
         """Turn a failure mid-read into ProcessExited if the target died."""
         if isinstance(exc, ProcessLookupError):
             return ProcessExited(self.pid)
-        try:
-            procfs.read_stat(self.pid)
-        except ProcessLookupError:
+        if not osproc.pid_exists(self.pid):
             return ProcessExited(self.pid)
         return exc
 

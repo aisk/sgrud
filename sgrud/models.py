@@ -2,7 +2,7 @@
 
 Everything here is a frozen dataclass so snapshots can be compared, cached,
 serialized with :func:`dataclasses.asdict` and consumed by any front end
-(CLI, TUI, tests) without touching ``_remote_debugging`` or ``/proc``.
+(CLI, TUI, tests) without touching ``_remote_debugging`` or psutil.
 """
 
 from __future__ import annotations
@@ -71,7 +71,8 @@ class Thread:
     name: str
     interpreter_id: int
     status: ThreadStatus
-    #: Kernel scheduler state letter from ``/proc`` (R, S, D, ...), or "".
+    #: Scheduler state spelled like psutil does it (running, sleeping,
+    #: disk-sleep, ...). Only Linux reports it per thread; "" elsewhere.
     state: str
     user_time: float
     system_time: float
@@ -139,7 +140,11 @@ class GCGeneration:
 
 @dataclass(frozen=True, slots=True)
 class Memory:
-    """Process memory figures from ``/proc/<pid>/status``, in bytes."""
+    """Process memory figures in bytes.
+
+    Fields the platform does not report are 0: macOS has only ``rss`` and
+    ``vms``, Windows lacks ``swap`` and ``shared``.
+    """
 
     rss: int
     vms: int

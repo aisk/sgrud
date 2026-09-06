@@ -110,14 +110,15 @@ def test_convert_gc_ring_buffer_with_cumulative_counters():
 
 def test_looks_like_python_heuristic():
     import os
-    import subprocess
 
-    from sgrud import procfs
+    from conftest import spawn_sleeper
 
-    assert procfs.looks_like_python(os.getpid())
-    proc = subprocess.Popen(["sleep", "2"])
+    from sgrud import osproc
+
+    assert osproc.looks_like_python(os.getpid())
+    proc = spawn_sleeper(2)
     try:
-        assert not procfs.looks_like_python(proc.pid)
+        assert not osproc.looks_like_python(proc.pid)
     finally:
         proc.kill()
         proc.wait()

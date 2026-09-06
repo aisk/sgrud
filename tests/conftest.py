@@ -6,8 +6,18 @@ import time
 import pytest
 
 from sgrud import Monitor
+from sgrud.osproc import HAS_THREAD_STATS  # noqa: F401  (re-exported for the tests)
 
 TARGET = pathlib.Path(__file__).with_name("target_app.py")
+
+
+def spawn_sleeper(seconds: int = 5) -> subprocess.Popen[bytes]:
+    """A process that is definitely not Python and lives for a few seconds."""
+    if sys.platform == "win32":
+        argv = ["ping", "-n", str(seconds + 1), "127.0.0.1"]
+    else:
+        argv = ["sleep", str(seconds)]
+    return subprocess.Popen(argv, stdout=subprocess.DEVNULL)
 
 
 def spawn_target(*extra: str) -> subprocess.Popen[bytes]:

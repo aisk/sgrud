@@ -10,12 +10,13 @@ các task asyncio, stack và bộ thu gom rác của nó mà không làm nó ch�
 sgrud không bao giờ dừng hay chèn mã vào tiến trình đích. Nó đọc trạng thái
 của trình thông dịch trực tiếp từ bộ nhớ tiến trình thông qua module
 `_remote_debugging` của CPython 3.15 (cơ chế đứng sau profiler Tachyon và
-`python -m asyncio ps`) và kết hợp với `/proc` để thống kê bộ nhớ và CPU.
-Một ảnh chụp stack của mọi thread chỉ tốn vài chục micro giây và không tốn
-gì ở phía tiến trình đích.
+`python -m asyncio ps`) và kết hợp với những gì hệ điều hành báo cáo để
+thống kê bộ nhớ và CPU. Một ảnh chụp stack của mọi thread chỉ tốn vài chục
+micro giây và không tốn gì ở phía tiến trình đích.
 
-Yêu cầu Linux và CPython 3.15 trở lên. Tiến trình đích phải chạy cùng phiên
-bản major.minor với chính sgrud.
+Yêu cầu CPython 3.15 trở lên trên Linux, macOS hoặc Windows. Tiến trình đích
+phải chạy cùng phiên bản major.minor với chính sgrud. Linux cho đầy đủ thông
+tin nhất, xem [Nền tảng](#nền-tảng) để biết các nền tảng khác thiếu gì.
 
 ## Cách dùng
 
@@ -108,12 +109,28 @@ tree = sampler.hotspots.call_tree()  # merged call tree, one child per thread
 print("\n".join(sampler.hotspots.folded()))  # flamegraph.pl input
 ```
 
+## Nền tảng
+
+Stack, task asyncio, GC và profiler đều lấy từ `_remote_debugging` và hoạt
+động giống nhau ở mọi nơi. Thống kê tiến trình và thread lấy từ hệ điều hành
+thông qua psutil, và đó là chỗ các nền tảng khác nhau.
+
+- **Linux** báo cáo mọi thứ, kể cả trạng thái lập lịch của từng thread, thứ
+  dùng để đánh dấu thread đang chạy trên CPU ở chế độ wall.
+- **Windows** có tên thread và thời gian CPU của từng thread nhưng không có
+  trạng thái lập lịch, nên ở chế độ wall thread hiện `?` thay vì `cpu` /
+  `idle`. Không báo cáo swap và bộ nhớ dùng chung.
+- **macOS** không thể khớp thread của hệ điều hành với id thread của trình
+  thông dịch, nên thread hiện không có tên và số liệu CPU, còn bộ nhớ chỉ có
+  `rss` / `vms`. Đọc bộ nhớ của tiến trình khác cần root, vì vậy hãy chạy
+  sgrud với `sudo`.
+
 ## Quyền hạn
 
-Bộ nhớ, CPU và tên thread lấy từ `/proc` và hoạt động với mọi tiến trình
-thuộc về bạn. Những thứ còn lại đọc bộ nhớ của tiến trình đích, việc này cần
-quyền ptrace, và giá trị mặc định `kernel.yama.ptrace_scope=1` chỉ cấp quyền
-đó cho các tiến trình con. Nếu thiếu quyền, sgrud gắn vào ở chế độ hạn chế
+Bộ nhớ, CPU và tên thread lấy từ hệ điều hành và hoạt động với mọi tiến trình
+thuộc về bạn. Những thứ còn lại đọc bộ nhớ của tiến trình đích. Trên Linux
+việc này cần quyền ptrace, và giá trị mặc định `kernel.yama.ptrace_scope=1`
+chỉ cấp quyền đó cho các tiến trình con. Nếu thiếu quyền, sgrud gắn vào ở chế độ hạn chế
 và hiện một banner giải thích những gì đang thiếu. Để có đầy đủ mọi thứ, hãy
 khởi chạy tiến trình đích qua `sgrud run -- ...`, chạy sgrud với `sudo`, cấp
 `CAP_SYS_PTRACE`, hoặc nới lỏng Yama cho phiên hiện tại:
@@ -121,6 +138,10 @@ khởi chạy tiến trình đích qua `sgrud run -- ...`, chạy sgrud với `s
 ```
 echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
 ```
+
+Trên macOS chỉ root mới đọc được bộ nhớ của tiến trình khác, nên hãy dùng
+`sudo`. Trên Windows mọi tiến trình cùng người dùng đều được, tiến trình của
+người dùng khác cần quyền quản trị viên.
 
 Truyền `require_full=True` cho `Monitor.attach` để báo lỗi thay vì chạy ở
 chế độ hạn chế. Tiến trình đích khởi chạy với `-X disable-remote-debug` vẫn

@@ -8,11 +8,12 @@ asyncio 任务、调用栈和垃圾回收器，而不会拖慢目标进程。
 
 sgrud 从不暂停或插桩目标进程。它通过 CPython 3.15 的 `_remote_debugging` 模块
 （Tachyon 性能分析器和 `python -m asyncio ps` 背后的机制）直接从进程内存中读取
-解释器状态，并结合 `/proc` 来统计内存和 CPU。抓取一次所有线程的调用栈只需几十微秒，
-目标进程侧则没有任何开销。
+解释器状态，并结合操作系统提供的信息来统计内存和 CPU。抓取一次所有线程的调用栈
+只需几十微秒，目标进程侧则没有任何开销。
 
-需要 Linux 以及 CPython 3.15 或更新版本。目标进程必须运行与 sgrud 自身相同的
-major.minor 版本。
+需要 CPython 3.15 或更新版本，支持 Linux、macOS 和 Windows。目标进程必须运行与
+sgrud 自身相同的 major.minor 版本。Linux 上信息最完整，其它平台的差异见
+[平台](#平台)。
 
 ## 用法
 
@@ -98,17 +99,33 @@ tree = sampler.hotspots.call_tree()  # merged call tree, one child per thread
 print("\n".join(sampler.hotspots.folded()))  # flamegraph.pl input
 ```
 
+## 平台
+
+调用栈、asyncio 任务、GC 和性能分析都来自 `_remote_debugging`，在各平台上表现
+一致。进程和线程的统计信息通过 psutil 从操作系统获取，平台差异都在这里。
+
+- **Linux** 提供全部信息，包括线程的调度状态，wall 模式下正是靠它标记线程是否
+  在 CPU 上。
+- **Windows** 有线程名和线程级 CPU 时间，但没有调度状态，所以 wall 模式下线程
+  显示为 `?` 而不是 `cpu` / `idle`。不报告 swap 和共享内存。
+- **macOS** 无法把操作系统线程和解释器的线程 id 对应起来，所以线程没有名字和
+  CPU 数据，内存只有 `rss` / `vms`。读取其它进程的内存需要 root，请用 `sudo`
+  运行 sgrud。
+
 ## 权限
 
-内存、CPU 和线程名来自 `/proc`，对你拥有的任何进程都可用。其余信息都需要读取
-目标进程的内存，这需要 ptrace 权限，而默认的 `kernel.yama.ptrace_scope=1` 只对
-子进程授予这些权限。没有这些权限时，sgrud 会以受限模式附加，并显示一条横幅说明
+内存、CPU 和线程名来自操作系统，对你拥有的任何进程都可用。其余信息都需要读取
+目标进程的内存。在 Linux 上这需要 ptrace 权限，而默认的 `kernel.yama.ptrace_scope=1`
+只对子进程授予这些权限。没有这些权限时，sgrud 会以受限模式附加，并显示一条横幅说明
 缺少了什么。要获得完整功能，可以通过 `sgrud run -- ...` 启动目标，用 `sudo`
 运行 sgrud，授予 `CAP_SYS_PTRACE`，或者在当前会话中放宽 Yama 限制：
 
 ```
 echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
 ```
+
+macOS 上只有 root 能读取其它进程的内存，请使用 `sudo`。Windows 上同一用户的
+进程都可以，其它用户的进程需要管理员权限。
 
 给 `Monitor.attach` 传入 `require_full=True` 可以让它在权限不足时直接失败，
 而不是降级运行。使用 `-X disable-remote-debug` 启动的目标仍然可以被观察，

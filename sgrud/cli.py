@@ -132,7 +132,8 @@ def _dump(args: argparse.Namespace) -> int:
     produced = 0
     if monitor.limited is not None:
         print(
-            f"sgrud: limited mode, only /proc data is available. {monitor.limited}", file=sys.stderr
+            f"sgrud: limited mode, only OS process statistics are available. {monitor.limited}",
+            file=sys.stderr,
         )
     try:
         with monitor:

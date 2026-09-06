@@ -23,7 +23,11 @@ jobs:
       - run: uv run ty check
 
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -32,8 +36,13 @@ jobs:
       - run: uv sync --locked
       # Tests attach to a child process. That already works under the default
       # ptrace_scope=1, but relax it so a runner image change cannot break CI.
-      - run: echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
-      - run: uv run pytest -v
+      - if: runner.os == 'Linux'
+        run: echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
+      - if: runner.os != 'macOS'
+        run: uv run pytest -v
+      # macOS only lets root read another process's memory.
+      - if: runner.os == 'macOS'
+        run: sudo --preserve-env=PATH,UV_CACHE_DIR uv run pytest -v
 
   build:
     runs-on: ubuntu-latest

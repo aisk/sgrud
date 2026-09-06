@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 import threading
 import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 
-from . import procfs
+from . import osproc
 from .errors import AttachError, ProcessExited
 from .models import Process, Snapshot, Task, Thread, ThreadStatus
-from .remote import RemoteInspector, is_python_process, permission_hint
+from .remote import RemoteInspector, access_hint, is_python_process
 
 
 @dataclass(slots=True)
@@ -39,13 +38,13 @@ class Monitor:
         gc_markers: bool = True,
         cache_frames: bool = True,
     ):
-        procfs.ensure_supported()
+        osproc.ensure_supported()
         self.pid = pid
         self._child = child
         self._inspector: RemoteInspector | None = None
         #: Why the target's memory cannot be read, or None for full access.
-        #: In limited mode only /proc based data (memory, CPU, thread names)
-        #: is available; stacks, tasks, GC and hotspots are not.
+        #: In limited mode only what the OS reports (memory, CPU, thread
+        #: names) is available; stacks, tasks, GC and hotspots are not.
         self.limited: str | None = None
         # The unwinder keeps per-call caches, so serialize access to it when a
         # background Sampler and the UI thread share one Monitor.
@@ -55,10 +54,8 @@ class Monitor:
         )
         self._proc_cpu: _CpuSample | None = None
         self._thread_cpu: dict[int, _CpuSample] = {}
-        self._boot_uptime = procfs.uptime()
-        self._boot_wall = time.time()
         try:
-            self._start = procfs.read_stat(pid).starttime
+            self._stats = osproc.ProcessStats(pid)
         except ProcessLookupError as e:
             raise ProcessExited(pid) from e
 
@@ -73,22 +70,21 @@ class Monitor:
         ``require_full`` is set. Transient failures (the interpreter is
         still starting) are retried for up to ``retry`` seconds.
         """
-        procfs.ensure_supported()
-        if not os.path.isdir(f"/proc/{pid}"):
+        osproc.ensure_supported()
+        if not osproc.pid_exists(pid):
             raise ProcessExited(pid)
-        if not procfs.can_read_memory(pid):
+        hint = access_hint(pid)
+        if hint is not None:
             # is_python_process() also needs to read memory and would report
             # a perfectly good interpreter as "not Python", so check first.
-            hint = permission_hint()
-            if require_full or not procfs.looks_like_python(pid):
+            if require_full or not osproc.looks_like_python(pid):
                 raise AttachError(pid, "permission denied", hint)
             monitor = cls(pid, **options)
             monitor.limited = hint
             return monitor
         if not is_python_process(pid):
-            exe = ""
             try:
-                exe = procfs.exe(pid)
+                exe = osproc.exe(pid)
             except ProcessLookupError:
                 raise ProcessExited(pid) from None
             raise AttachError(
@@ -202,7 +198,7 @@ class Monitor:
     def _check_alive(self) -> None:
         if self._child is not None and self._child.poll() is not None:
             raise ProcessExited(self.pid, self._child.returncode)
-        if not os.path.isdir(f"/proc/{self.pid}"):
+        if not self._stats.is_running():
             raise ProcessExited(self.pid)
 
     # -- sampling ------------------------------------------------------
@@ -231,25 +227,21 @@ class Monitor:
         now = time.monotonic()
         errors: dict[str, str] = {}
         try:
-            stat = procfs.read_stat(self.pid)
-            memory = procfs.read_memory(self.pid)
-            tids = procfs.list_tids(self.pid)
-            cmd = procfs.cmdline(self.pid)
-            exe = procfs.exe(self.pid)
+            stat = self._stats.process()
+            os_threads = self._stats.threads()
         except ProcessLookupError as e:
             raise ProcessExited(self.pid) from e
 
-        uptime = (self._boot_uptime + (time.time() - self._boot_wall)) - self._start
         process = Process(
             pid=self.pid,
-            exe=exe,
-            cmdline=cmd,
+            exe=stat.exe,
+            cmdline=stat.cmdline,
             state=stat.state,
             num_threads=stat.num_threads,
-            memory=memory,
+            memory=stat.memory,
             user_time=stat.utime,
             system_time=stat.stime,
-            uptime=max(uptime, 0.0),
+            uptime=max(time.time() - self._stats.start_time, 0.0),
             cpu_percent=self._cpu_percent(None, now, stat.utime + stat.stime),
         )
 
@@ -271,29 +263,32 @@ class Monitor:
             except Exception as e:
                 errors["stacks"] = f"{type(e).__name__}: {e}"
 
+        # Where the OS cannot name threads by the same id as the interpreter
+        # (macOS) the interpreter's own thread list is all there is.
+        tids = sorted(os_threads) if os_threads else sorted(remote)
         threads: list[Thread] = []
         for tid in tids:
-            try:
-                tstat = procfs.read_stat(self.pid, tid)
-            except ProcessLookupError:
-                continue  # thread finished between listing and reading
+            tstat = os_threads.get(tid)
             interp, status, frames = remote.get(tid, (0, ThreadStatus.UNKNOWN, ()))
-            if tid in remote:
+            if tid in remote and tstat is not None and tstat.state:
                 # In wall mode the unwinder does not check CPU state and
-                # flags it UNKNOWN. /proc already told us, so fill it in.
+                # flags it UNKNOWN. The OS already told us, so fill it in.
                 status &= ~ThreadStatus.UNKNOWN
-                if tstat.state == "R":
+                if tstat.state == "running":
                     status |= ThreadStatus.ON_CPU
+            cpu_percent = None
+            if tstat is not None:
+                cpu_percent = self._cpu_percent(tid, now, tstat.utime + tstat.stime)
             threads.append(
                 Thread(
                     tid=tid,
-                    name=procfs.thread_name(self.pid, tid) or tstat.comm,
+                    name=tstat.name if tstat else "",
                     interpreter_id=interp,
                     status=status,
-                    state=tstat.state,
-                    user_time=tstat.utime,
-                    system_time=tstat.stime,
-                    cpu_percent=self._cpu_percent(tid, now, tstat.utime + tstat.stime),
+                    state=tstat.state if tstat else "",
+                    user_time=tstat.utime if tstat else 0.0,
+                    system_time=tstat.stime if tstat else 0.0,
+                    cpu_percent=cpu_percent,
                     frames=frames,
                 )
             )

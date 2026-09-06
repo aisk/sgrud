@@ -3,7 +3,7 @@ import sys
 import time
 
 import pytest
-from conftest import TARGET, spawn_target
+from conftest import HAS_THREAD_STATS, TARGET, spawn_sleeper, spawn_target
 
 from sgrud import AttachError, Monitor, ProcessExited, ThreadStatus
 from sgrud.format import format_snapshot
@@ -22,23 +22,27 @@ def test_process_section(snapshot, target):
 
 
 def test_threads_have_names_status_and_stacks(snapshot, monitor):
-    by_name = {t.name: t for t in snapshot.threads}
-    assert {"busy", "idle"} <= set(by_name)
+    by_frame = {t.frames[0].funcname: t for t in snapshot.threads if t.frames}
+    assert {"busy_loop", "idle_loop"} <= set(by_frame)
     main = [t for t in snapshot.threads if t.is_main]
     assert len(main) == 1
-    assert main[0].tid == snapshot.process.pid
+    if sys.platform != "darwin":
+        assert main[0].tid == snapshot.process.pid
 
-    busy = by_name["busy"]
-    assert busy.frames[0].funcname == "busy_loop"
+    busy = by_frame["busy_loop"]
     assert busy.frames[0].filename.endswith("target_app.py")
     assert busy.frames[0].lineno is not None
-    assert busy.cpu_percent is not None and busy.cpu_percent > 5
+    idle = by_frame["idle_loop"]
+    if HAS_THREAD_STATS:
+        assert busy.name == "busy" and idle.name == "idle"
+        assert busy.cpu_percent is not None and busy.cpu_percent > 5
+        assert idle.cpu_percent is not None and idle.cpu_percent < 5
+    else:
+        assert busy.cpu_percent is None
 
-    idle = by_name["idle"]
-    assert idle.frames[0].funcname == "idle_loop"
-    assert idle.cpu_percent is not None and idle.cpu_percent < 5
     # The sleeping thread wakes every 0.2s and can be caught in state R at the
     # sampling instant, so give the flag a few chances to read as off-CPU.
+    # Only Linux reports per-thread scheduler state, elsewhere it is unknown.
     idle_statuses = [idle.status]
     for _ in range(5):
         if any(not (s & ThreadStatus.ON_CPU) for s in idle_statuses):
@@ -47,6 +51,8 @@ def test_threads_have_names_status_and_stacks(snapshot, monitor):
         again = {t.tid: t for t in monitor.snapshot(tasks=False, gc=False).threads}
         idle_statuses.append(again[idle.tid].status)
     assert any(not (s & ThreadStatus.ON_CPU) for s in idle_statuses), idle_statuses
+    if sys.platform.startswith("linux"):
+        assert not any(s & ThreadStatus.UNKNOWN for s in idle_statuses), idle_statuses
 
     # A thread sleeping inside time.sleep sits under a <native> marker frame.
     assert any(f.synthetic and f.funcname == "<native>" for f in idle.frames)
@@ -110,7 +116,9 @@ def test_stack_sampling_is_fast(monitor):
     for _ in range(n):
         monitor.snapshot(tasks=False, gc=False)
     per_sample = (time.perf_counter() - t0) / n
-    assert per_sample < 0.005, f"{per_sample * 1e6:.0f}us per snapshot"
+    # psutil's thread listing on Windows snapshots every thread on the system.
+    budget = 0.02 if sys.platform == "win32" else 0.005
+    assert per_sample < budget, f"{per_sample * 1e6:.0f}us per snapshot"
 
 
 def test_stream_stops_when_target_exits():
@@ -132,7 +140,7 @@ def test_spawn_child():
         assert m.child is not None
         snap = m.snapshot()
         assert snap.process.pid == m.child.pid
-        assert any(t.name == "busy" for t in snap.threads) or snap.threads
+        assert snap.threads
     assert m.child.poll() is not None
 
 
@@ -143,9 +151,7 @@ def test_spawn_reports_early_exit():
 
 
 def test_attach_to_non_python_process():
-    import subprocess
-
-    proc = subprocess.Popen(["sleep", "5"])
+    proc = spawn_sleeper()
     try:
         with pytest.raises(AttachError) as info:
             Monitor.attach(proc.pid)
@@ -165,10 +171,10 @@ def test_attach_without_ptrace_falls_back_to_limited_mode(tmp_path):
     import signal
     import subprocess
 
-    from sgrud import procfs
+    from sgrud import osproc
 
-    if procfs.ptrace_scope() != 1 or os.geteuid() == 0:
-        pytest.skip("needs kernel.yama.ptrace_scope=1 and a non-root user")
+    if not osproc.LINUX or osproc.ptrace_scope() != 1 or os.geteuid() == 0:
+        pytest.skip("needs Linux with kernel.yama.ptrace_scope=1 and a non-root user")
     # Double fork so the target is reparented away from us and is no longer a
     # descendant, which is what ptrace_scope=1 keys on. The launcher hands the
     # grandchild's pid over through a file to avoid holding any pipe open.
@@ -198,7 +204,7 @@ def test_attach_without_ptrace_falls_back_to_limited_mode(tmp_path):
         assert "ptrace_scope" in str(info.value)
         assert "CPython" not in str(info.value)
 
-        # Without require_full we still get everything /proc can tell us.
+        # Without require_full we still get everything the OS can tell us.
         with Monitor.attach(pid) as m:
             assert m.limited is not None and "ptrace_scope" in m.limited
             m.snapshot(stacks=False, tasks=False, gc=False)
