@@ -52,6 +52,7 @@ class _NoMonitor:
     """Stands in for a Monitor when the test drives apply_snapshot itself."""
 
     pid = 42
+    limited = None
 
     def snapshot(self, **kw):
         from sgrud import ProcessExited

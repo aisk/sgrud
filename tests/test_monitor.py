@@ -152,7 +152,7 @@ def test_attach_to_missing_pid():
         Monitor.attach(2**22 - 1)
 
 
-def test_attach_denied_by_ptrace_scope_reports_permissions(tmp_path):
+def test_attach_without_ptrace_falls_back_to_limited_mode(tmp_path):
     import os
     import signal
     import subprocess
@@ -184,10 +184,27 @@ def test_attach_denied_by_ptrace_scope_reports_permissions(tmp_path):
     )
     pid = int(pidfile.read_text())
     try:
-        time.sleep(0.3)
+        time.sleep(0.5)
         with pytest.raises(AttachError) as info:
-            Monitor.attach(pid)
+            Monitor.attach(pid, require_full=True)
         assert "ptrace_scope" in str(info.value)
         assert "CPython" not in str(info.value)
+
+        # Without require_full we still get everything /proc can tell us.
+        with Monitor.attach(pid) as m:
+            assert m.limited is not None and "ptrace_scope" in m.limited
+            m.snapshot(stacks=False, tasks=False, gc=False)
+            time.sleep(0.15)
+            snap = m.snapshot()
+        assert snap.process.memory.rss > 0
+        assert snap.process.cpu_percent is not None
+        names = {t.name for t in snap.threads}
+        assert {"busy", "idle"} <= names
+        busy = next(t for t in snap.threads if t.name == "busy")
+        assert busy.cpu_percent is not None and busy.cpu_percent > 5
+        assert busy.frames == () and busy.status == ThreadStatus.UNKNOWN
+        assert snap.tasks == () and snap.gc == ()
+        assert "ptrace_scope" in snap.errors["attach"]
+        assert set(snap.errors) == {"attach"}
     finally:
         os.kill(pid, signal.SIGKILL)

@@ -107,6 +107,28 @@ def exe(pid: int) -> str:
         return ""
 
 
+def looks_like_python(pid: int) -> bool:
+    """Cheap guess from the executable name and mapped libraries.
+
+    Used when the target's memory cannot be read, which is what the
+    authoritative check in ``_remote_debugging`` needs.
+    """
+    try:
+        name = os.path.basename(exe(pid)).lower()
+    except ProcessLookupError:
+        return False
+    if name.startswith("python"):
+        return True
+    try:
+        with open(f"/proc/{pid}/maps") as maps:
+            for line in maps:
+                if "libpython" in line:
+                    return True
+    except OSError:
+        pass
+    return False
+
+
 def uptime() -> float:
     """Seconds since boot, the reference for ``StatLine.starttime``."""
     return float(_read("/proc/uptime").split()[0])

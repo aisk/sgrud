@@ -93,6 +93,8 @@ class Summary(Static):
         elif paused:
             text.append("  PAUSED", "bold yellow")
         for section, err in snap.errors.items():
+            if section == "attach":
+                continue  # shown in the banner
             text.append(f"  !{section}: {err.splitlines()[0]}", "red")
         self.update(text)
 
@@ -130,6 +132,7 @@ class SgrudApp(App[int]):
     TITLE = "sgrud"
     CSS = """
     Summary { height: 1; background: $primary-background; }
+    #banner { height: auto; padding: 0 1; background: $warning 30%; color: $text; }
     #tabs { height: 1fr; }
     #left { width: 3fr; }
     .stack { width: 2fr; border-left: solid $secondary; padding: 0 1; }
@@ -172,7 +175,11 @@ class SgrudApp(App[int]):
         super().__init__()
         self.monitor = monitor
         self.hotspots = Hotspots(sample_mode)
-        self.sampler = Sampler(monitor, self.hotspots, rate=sample_rate) if sample_rate > 0 else None
+        self.sampler = (
+            Sampler(monitor, self.hotspots, rate=sample_rate)
+            if sample_rate > 0 and monitor.limited is None
+            else None
+        )
         self.hot_sort = "self"
         self.hot_thread: int | None = None
         self._hot_options: tuple[int, ...] = ()
@@ -195,6 +202,17 @@ class SgrudApp(App[int]):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield Summary(id="summary")
+        banner = Static("", id="banner")
+        banner.display = self.monitor.limited is not None
+        if self.monitor.limited is not None:
+            banner.update(
+                Text.assemble(
+                    ("LIMITED MODE  ", "bold"),
+                    "stacks, tasks, GC and hotspots are unavailable: ",
+                    self.monitor.limited,
+                )
+            )
+        yield banner
         with TabbedContent(id="tabs"):
             with TabPane("Threads", id="threads"):
                 with Horizontal():
@@ -499,7 +517,9 @@ class SgrudApp(App[int]):
         hot = self.hotspots
         rows = hot.rows(thread=self.hot_thread, sort=self.hot_sort, limit=200)
         info = Text()
-        if self.sampler is None:
+        if self.monitor.limited is not None:
+            info.append("unavailable without memory access, see banner", "yellow")
+        elif self.sampler is None:
             info.append("sampling disabled (--rate 0)", "dim")
         else:
             state = "stopped" if not self.sampler.running else "sampling"

@@ -89,9 +89,15 @@ def _dump(args: argparse.Namespace) -> int:
         print(f"sgrud: {e}", file=sys.stderr)
         return 1
     produced = 0
+    if monitor.limited is not None:
+        print(f"sgrud: limited mode, only /proc data is available. {monitor.limited}",
+              file=sys.stderr)
     try:
         with monitor:
             if args.profile is not None:
+                if monitor.limited is not None:
+                    print("sgrud: --profile needs access to the target's memory", file=sys.stderr)
+                    return 1
                 return _profile(monitor, args)
             if args.interval is None:
                 # A second sample a moment later gives meaningful CPU percentages.

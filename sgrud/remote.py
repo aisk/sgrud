@@ -196,17 +196,26 @@ class RemoteInspector:
                 )
         return out
 
-    def tasks(self) -> tuple[Task, ...]:
-        """All asyncio tasks in the target, across threads."""
-        try:
-            result = self._unwinder.get_all_awaited_by()
-        except RuntimeError as e:
-            # asyncio not imported in the target is a normal condition.
-            if "AsyncioDebug" in str(e) or "asyncio" in str(e).lower():
-                return ()
-            raise self._guard(e) from e
-        except Exception as e:
-            raise self._guard(e) from e
+    def tasks(self, retries: int = 3) -> tuple[Task, ...]:
+        """All asyncio tasks in the target, across threads.
+
+        Walking the task graph takes several memory reads while the target
+        keeps running, so a torn read is possible. Like ``asyncio ps`` we
+        retry a few times before giving up.
+        """
+        for attempt in range(retries):
+            try:
+                result = self._unwinder.get_all_awaited_by()
+                break
+            except RuntimeError as e:
+                # asyncio not imported in the target is a normal condition.
+                if "AsyncioDebug" in str(e) or "asyncio" in str(e).lower():
+                    return ()
+                if attempt == retries - 1:
+                    raise self._guard(e) from e
+            except Exception as e:
+                if attempt == retries - 1:
+                    raise self._guard(e) from e
         tasks: list[Task] = []
         for awaited in result:
             for t in awaited.awaited_by:

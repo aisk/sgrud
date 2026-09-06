@@ -43,6 +43,10 @@ class Monitor:
         self.pid = pid
         self._child = child
         self._inspector: RemoteInspector | None = None
+        #: Why the target's memory cannot be read, or None for full access.
+        #: In limited mode only /proc based data (memory, CPU, thread names)
+        #: is available; stacks, tasks, GC and hotspots are not.
+        self.limited: str | None = None
         # The unwinder keeps per-call caches, so serialize access to it when a
         # background Sampler and the UI thread share one Monitor.
         self._lock = threading.Lock()
@@ -59,11 +63,15 @@ class Monitor:
             raise ProcessExited(pid) from e
 
     @classmethod
-    def attach(cls, pid: int, *, retry: float = 1.0, **options) -> Monitor:
+    def attach(
+        cls, pid: int, *, retry: float = 1.0, require_full: bool = False, **options
+    ) -> Monitor:
         """Attach to a running process. Raises AttachError with a hint on failure.
 
-        Transient failures (the interpreter is still starting) are retried
-        for up to ``retry`` seconds.
+        When the target's memory cannot be read (ptrace restrictions) the
+        monitor comes back in limited mode, see :attr:`limited`, unless
+        ``require_full`` is set. Transient failures (the interpreter is
+        still starting) are retried for up to ``retry`` seconds.
         """
         procfs.ensure_supported()
         if not os.path.isdir(f"/proc/{pid}"):
@@ -71,7 +79,12 @@ class Monitor:
         if not procfs.can_read_memory(pid):
             # is_python_process() also needs to read memory and would report
             # a perfectly good interpreter as "not Python", so check first.
-            raise AttachError(pid, "permission denied", permission_hint())
+            hint = permission_hint()
+            if require_full or not procfs.looks_like_python(pid):
+                raise AttachError(pid, "permission denied", hint)
+            monitor = cls(pid, **options)
+            monitor.limited = hint
+            return monitor
         if not is_python_process(pid):
             exe = ""
             try:
@@ -145,6 +158,8 @@ class Monitor:
         self.close()
 
     def _get_inspector(self) -> RemoteInspector:
+        if self.limited is not None:
+            raise AttachError(self.pid, "limited mode", self.limited)
         with self._lock:
             if self._inspector is None:
                 self._inspector = RemoteInspector(self.pid, **self._inspector_opts)
@@ -225,7 +240,9 @@ class Monitor:
 
         remote: dict[int, tuple[int, ThreadStatus, tuple]] = {}
         inspector: RemoteInspector | None = None
-        if stacks or tasks or gc:
+        if self.limited is not None:
+            errors["attach"] = self.limited
+        elif stacks or tasks or gc:
             try:
                 inspector = self._get_inspector()
             except AttachError as e:

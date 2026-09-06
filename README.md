@@ -78,10 +78,22 @@ for row in sampler.hotspots.rows(sort="self", limit=10):
 
 ## Permissions
 
-Reading another process's memory needs ptrace rights. With the default
-`kernel.yama.ptrace_scope=1` only child processes can be inspected, so
-either use `sgrud run -- ...`, run sgrud with `sudo`, or grant
-`CAP_SYS_PTRACE`. sgrud detects this and prints the fix in the error.
+Memory, CPU, thread names and per-thread CPU come from `/proc` and work
+for any process you own. Stacks, GIL state, asyncio tasks, GC statistics
+and hotspots need to read the target's memory, which needs ptrace rights.
+With the default `kernel.yama.ptrace_scope=1` that is only granted for
+child processes.
+
+Without those rights sgrud still attaches in limited mode and shows what it
+can, with a banner explaining what is missing. To get everything, either
+start the target through `sgrud run -- ...`, run sgrud with `sudo`, grant
+`CAP_SYS_PTRACE`, or relax Yama for the session:
+
+```
+echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
+```
+
+Pass `require_full=True` to `Monitor.attach` to fail instead of degrading.
 
 A target started with `-X disable-remote-debug` can still be inspected.
 That flag only disables code injection, which sgrud does not use.

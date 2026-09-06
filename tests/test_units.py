@@ -99,3 +99,19 @@ def test_convert_gc_ring_buffer_with_cumulative_counters():
     # Oldest surviving entry has no predecessor, so its deltas are unknown.
     assert g2.history[1].collected == -1
     assert math.isnan(g2.history[1].duration)
+
+
+def test_looks_like_python_heuristic():
+    import os
+    import subprocess
+    import sys
+
+    from sgrud import procfs
+
+    assert procfs.looks_like_python(os.getpid())
+    proc = subprocess.Popen(["sleep", "2"])
+    try:
+        assert not procfs.looks_like_python(proc.pid)
+    finally:
+        proc.kill()
+        proc.wait()
