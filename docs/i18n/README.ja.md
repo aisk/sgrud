@@ -18,6 +18,10 @@ CPython 3.15 以降が必要で、Linux、macOS、Windows で動作します。�
 すべての情報が得られます。他のプラットフォームとの違いは
 [プラットフォーム](#プラットフォーム) を参照してください。
 
+![Threads タブ。各スレッドの状態、CPU 使用率、現在の Python スタックを表示](https://github.com/user-attachments/assets/5a6bf1a3-fddb-48fe-9aa6-18c76f751ef7)
+
+*Threads タブ：各スレッドの状態、CPU 占有率、ライブの Python スタック。*
+
 ## 使い方
 
 ```
@@ -72,6 +76,18 @@ sgrud profile PID --folded          flamegraph.pl や speedscope 向けの折り
 他のタブを見ている間も動作し続けます。フレームグラフは下から上に伸び、最初の
 行で各スレッドに独自のブロックを割り当てるため、アイドル状態のスレッドは他の
 スレッドに混ざることなく、高い柱として表示されます。
+
+![Tasks タブ。asyncio タスクのツリーと各タスクが待機している対象を表示](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
+
+*Tasks タブ：asyncio タスクのツリー。各タスクが停止しているコルーチンフレーム付き。*
+
+![Hotspots タブ。CPU サンプルが最も多い関数を一覧表示](https://github.com/user-attachments/assets/32c75ac9-e279-41e8-83a2-b7e2970275e4)
+
+*Hotspots タブ：バックグラウンドサンプラーの self / total サンプル数で並べた関数。*
+
+![Flame タブ。サンプリングしたスタックのフレームグラフを表示](https://github.com/user-attachments/assets/b78cfbec-3619-45a6-a2a9-5bc57f2e45f3)
+
+*Flame タブ：同じサンプルをフレームグラフとして表示。最初の行はスレッドごとに 1 ブロック。*
 
 ### Web
 

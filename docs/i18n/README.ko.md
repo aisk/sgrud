@@ -17,6 +17,10 @@ CPython 3.15 이상이 필요하며 Linux, macOS, Windows에서 동작합니다.
 자체와 같은 major.minor 버전으로 실행되어야 합니다. Linux에서는 모든 정보를 얻을
 수 있고, 다른 플랫폼과의 차이는 [플랫폼](#플랫폼)을 참고하십시오.
 
+![Threads 탭. 각 스레드의 상태, CPU 사용량, 현재 Python 스택을 표시](https://github.com/user-attachments/assets/5a6bf1a3-fddb-48fe-9aa6-18c76f751ef7)
+
+*Threads 탭: 각 스레드의 상태, CPU 점유율, 실시간 Python 스택.*
+
 ## 사용법
 
 ```
@@ -68,6 +72,18 @@ sgrud profile PID --folded          flamegraph.pl이나 speedscope용 접힌 스
 샘플러(`--rate`, 기본 100 Hz)를 공유하며, 다른 탭을 보고 있는 동안에도 계속
 동작합니다. 플레임 그래프는 아래에서 위로 자라며 첫 번째 행에서 각 스레드에 고유한
 블록을 배정하므로, 유휴 스레드는 다른 스레드와 섞이지 않고 높은 기둥으로 나타납니다.
+
+![Tasks 탭. asyncio 태스크 트리와 각 태스크가 기다리는 대상을 표시](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
+
+*Tasks 탭: asyncio 태스크 트리. 각 태스크가 멈춰 있는 코루틴 프레임을 함께 표시.*
+
+![Hotspots 탭. CPU 샘플이 가장 많은 함수 목록](https://github.com/user-attachments/assets/32c75ac9-e279-41e8-83a2-b7e2970275e4)
+
+*Hotspots 탭: 백그라운드 샘플러의 self / total 샘플 수로 정렬한 함수.*
+
+![Flame 탭. 샘플링한 스택의 플레임 그래프](https://github.com/user-attachments/assets/b78cfbec-3619-45a6-a2a9-5bc57f2e45f3)
+
+*Flame 탭: 같은 샘플을 플레임 그래프로 표시. 첫 번째 행은 스레드마다 한 블록.*
 
 ### Web
 

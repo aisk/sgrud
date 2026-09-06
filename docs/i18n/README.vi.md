@@ -18,6 +18,10 @@ Yêu cầu CPython 3.15 trở lên trên Linux, macOS hoặc Windows. Tiến tr�
 phải chạy cùng phiên bản major.minor với chính sgrud. Linux cho đầy đủ thông
 tin nhất, xem [Nền tảng](#nền-tảng) để biết các nền tảng khác thiếu gì.
 
+![Tab Threads, hiển thị trạng thái, mức dùng CPU và stack Python hiện tại của từng thread](https://github.com/user-attachments/assets/5a6bf1a3-fddb-48fe-9aa6-18c76f751ef7)
+
+*Tab Threads: mỗi thread với trạng thái, phần CPU và stack Python đang chạy.*
+
 ## Cách dùng
 
 ```
@@ -72,6 +76,18 @@ Flame dùng chung một bộ lấy mẫu chạy nền (`--rate`, mặc định 1
 tục hoạt động khi bạn xem các tab khác. Biểu đồ flame mọc từ dưới lên và
 dành cho mỗi thread một khối riêng ở hàng đầu tiên, nên một thread nhàn rỗi
 sẽ hiện thành một cột cao thay vì bị trộn lẫn với các thread khác.
+
+![Tab Tasks, hiển thị cây task asyncio cùng thứ mỗi task đang chờ](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
+
+*Tab Tasks: các task asyncio dưới dạng cây, mỗi task kèm các frame coroutine nó đang dừng.*
+
+![Tab Hotspots, liệt kê các hàm có nhiều mẫu CPU nhất](https://github.com/user-attachments/assets/32c75ac9-e279-41e8-83a2-b7e2970275e4)
+
+*Tab Hotspots: các hàm xếp theo số mẫu self và total từ bộ lấy mẫu chạy nền.*
+
+![Tab Flame, hiển thị biểu đồ flame của các stack đã lấy mẫu](https://github.com/user-attachments/assets/b78cfbec-3619-45a6-a2a9-5bc57f2e45f3)
+
+*Tab Flame: cùng các mẫu đó dưới dạng biểu đồ flame, mỗi thread một khối ở hàng đầu tiên.*
 
 ### Web
 

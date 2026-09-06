@@ -20,6 +20,10 @@ Requires CPython 3.15 or newer on Linux, macOS or Windows. The target must
 run the same major.minor version as sgrud itself. Linux gets the full
 picture, see [Platforms](#platforms) for what the others lack.
 
+![The Threads tab, showing each thread's state, CPU usage and current Python stack](https://github.com/user-attachments/assets/5a6bf1a3-fddb-48fe-9aa6-18c76f751ef7)
+
+*The Threads tab: every thread with its state, CPU share and live Python stack.*
+
 ## Usage
 
 ```
@@ -72,6 +76,18 @@ Flame share one background sampler (`--rate`, default 100 Hz) that keeps
 running while you look at other tabs. The flame graph grows from the bottom
 and gives each thread its own block on the first row, so an idle thread
 shows up as a tall column instead of being mixed into the others.
+
+![The Tasks tab, showing the asyncio task tree with what each task is awaiting](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
+
+*The Tasks tab: asyncio tasks as a tree, each with the coroutine frames it is parked in.*
+
+![The Hotspots tab, listing the functions with the most CPU samples](https://github.com/user-attachments/assets/32c75ac9-e279-41e8-83a2-b7e2970275e4)
+
+*The Hotspots tab: functions ranked by self and total samples from the background sampler.*
+
+![The Flame tab, showing a flame graph of the sampled stacks](https://github.com/user-attachments/assets/b78cfbec-3619-45a6-a2a9-5bc57f2e45f3)
+
+*The Flame tab: the same samples as a flame graph, one block per thread on the first row.*
 
 ### Web
 

@@ -21,6 +21,10 @@ doit utiliser la même version majeure.mineure que sgrud lui-même. Linux
 donne le tableau complet, voir [Plateformes](#plateformes) pour ce qui
 manque aux autres.
 
+![L'onglet Threads, montrant l'état, l'utilisation CPU et la pile Python courante de chaque thread](https://github.com/user-attachments/assets/5a6bf1a3-fddb-48fe-9aa6-18c76f751ef7)
+
+*L'onglet Threads : chaque thread avec son état, sa part de CPU et sa pile Python en direct.*
+
 ## Utilisation
 
 ```
@@ -78,6 +82,18 @@ consultez d'autres onglets. Le graphe en flammes pousse depuis le bas et
 attribue à chaque thread son propre bloc sur la première ligne, si bien
 qu'un thread inactif apparaît comme une grande colonne au lieu d'être
 mélangé aux autres.
+
+![L'onglet Tasks, montrant l'arbre des tâches asyncio et ce que chaque tâche attend](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
+
+*L'onglet Tasks : les tâches asyncio en arbre, chacune avec les frames de coroutine où elle est arrêtée.*
+
+![L'onglet Hotspots, listant les fonctions avec le plus d'échantillons CPU](https://github.com/user-attachments/assets/32c75ac9-e279-41e8-83a2-b7e2970275e4)
+
+*L'onglet Hotspots : les fonctions classées par échantillons self et total de l'échantillonneur en arrière-plan.*
+
+![L'onglet Flame, montrant un graphe en flammes des piles échantillonnées](https://github.com/user-attachments/assets/b78cfbec-3619-45a6-a2a9-5bc57f2e45f3)
+
+*L'onglet Flame : les mêmes échantillons en graphe en flammes, un bloc par thread sur la première ligne.*
 
 ### Web
 

@@ -15,6 +15,10 @@ sgrud 从不暂停或插桩目标进程。它通过 CPython 3.15 的 `_remote_de
 sgrud 自身相同的 major.minor 版本。Linux 上信息最完整，其它平台的差异见
 [平台](#平台)。
 
+![Threads 标签页，显示每个线程的状态、CPU 占用和当前 Python 调用栈](https://github.com/user-attachments/assets/5a6bf1a3-fddb-48fe-9aa6-18c76f751ef7)
+
+*Threads 标签页：每个线程的状态、CPU 占比和实时 Python 调用栈。*
+
 ## 用法
 
 ```
@@ -64,6 +68,18 @@ sgrud profile PID --folded          输出折叠栈，供 flamegraph.pl 或 spee
 （`--rate`，默认 100 Hz），在你查看其他标签页时它也会持续运行。火焰图自底向上生长，
 第一行为每个线程分配一个独立的块，因此空闲线程会显示为一根高高的柱子，
 而不是混在其他线程里。
+
+![Tasks 标签页，以树形显示 asyncio 任务及各任务正在等待的内容](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
+
+*Tasks 标签页：asyncio 任务树，每个任务附带它停留的协程帧。*
+
+![Hotspots 标签页，列出 CPU 采样最多的函数](https://github.com/user-attachments/assets/32c75ac9-e279-41e8-83a2-b7e2970275e4)
+
+*Hotspots 标签页：按后台采样器的 self 和 total 采样数排列的函数。*
+
+![Flame 标签页，显示采样调用栈的火焰图](https://github.com/user-attachments/assets/b78cfbec-3619-45a6-a2a9-5bc57f2e45f3)
+
+*Flame 标签页：同一批采样绘制成火焰图，第一行每个线程一个块。*
 
 ### Web
 

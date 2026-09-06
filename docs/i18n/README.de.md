@@ -20,6 +20,10 @@ muss dieselbe major.minor-Version wie sgrud selbst verwenden. Linux liefert
 das vollständige Bild, siehe [Plattformen](#plattformen) für das, was den
 anderen fehlt.
 
+![Der Threads-Tab mit Zustand, CPU-Auslastung und aktuellem Python-Stack jedes Threads](https://github.com/user-attachments/assets/5a6bf1a3-fddb-48fe-9aa6-18c76f751ef7)
+
+*Der Threads-Tab: jeder Thread mit Zustand, CPU-Anteil und aktuellem Python-Stack.*
+
 ## Verwendung
 
 ```
@@ -75,6 +79,18 @@ Hotspots und Flame teilen sich einen Hintergrund-Sampler (`--rate`, Standard
 Graph wächst von unten nach oben und gibt jedem Thread in der ersten Zeile
 einen eigenen Block, sodass ein untätiger Thread als hohe Säule erscheint,
 statt mit den anderen vermischt zu werden.
+
+![Der Tasks-Tab mit dem Baum der asyncio-Tasks und dem, worauf jeder Task wartet](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
+
+*Der Tasks-Tab: asyncio-Tasks als Baum, jeder mit den Coroutine-Frames, in denen er wartet.*
+
+![Der Hotspots-Tab mit den Funktionen mit den meisten CPU-Samples](https://github.com/user-attachments/assets/32c75ac9-e279-41e8-83a2-b7e2970275e4)
+
+*Der Hotspots-Tab: Funktionen sortiert nach Self- und Total-Samples des Hintergrund-Samplers.*
+
+![Der Flame-Tab mit einem Flame Graph der gesampelten Stacks](https://github.com/user-attachments/assets/b78cfbec-3619-45a6-a2a9-5bc57f2e45f3)
+
+*Der Flame-Tab: dieselben Samples als Flame Graph, ein Block pro Thread in der ersten Zeile.*
 
 ### Web
 
