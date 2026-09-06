@@ -33,6 +33,7 @@ from textual.widgets import (
     Static,
     TabbedContent,
     TabPane,
+    Tabs,
     Tree,
 )
 
@@ -349,6 +350,28 @@ class FlameGraph(Widget, can_focus=True):
         self.post_message(self.Changed())
 
 
+class ThreadFilter(Select[int]):
+    """Thread selector that tells the app when its dropdown closes.
+
+    The app moves focus back to the tab's content on :class:`Closed`, so
+    picking a thread (or cancelling with escape) never leaves the user
+    parked on the filter.
+    """
+
+    class Closed(Message):
+        def __init__(self, select: ThreadFilter) -> None:
+            super().__init__()
+            self.select = select
+
+        @property
+        def control(self) -> ThreadFilter:
+            return self.select
+
+    def watch_expanded(self, expanded: bool) -> None:
+        if not expanded:
+            self.post_message(self.Closed(self))
+
+
 class SgrudApp(App[int]):
     TITLE = "sgrud"
     CSS = """
@@ -368,22 +391,39 @@ class SgrudApp(App[int]):
     .hist-label { color: $text-muted; }
     #procinfo { padding: 1; }
     """
+    # Focus always lives in the active tab's content, never on the tab bar,
+    # so the arrow keys drive tables, trees and the flame graph while tab
+    # switching has keys of its own. ``tab`` takes priority over Textual's
+    # focus cycling because no pane has more than one main widget; the
+    # thread filter is reached with ``f`` instead.
     BINDINGS = [
         Binding("q", "quit", "Quit"),
-        Binding("space", "toggle_pause", "Pause"),
+        Binding("p", "toggle_pause", "Pause"),
         Binding("r", "refresh_now", "Refresh"),
-        Binding("+", "faster", "Faster"),
+        Binding("+,=", "faster", "Faster", key_display="+"),
         Binding("-", "slower", "Slower"),
-        Binding("1", "tab('threads')", "Tabs", key_display="1-6"),
+        Binding("1", "tab('threads')", "Tabs", key_display="1-6 tab"),
         Binding("2", "tab('tasks')", "Tasks", show=False),
         Binding("3", "tab('gc')", "GC", show=False),
         Binding("4", "tab('process')", "Process", show=False),
         Binding("5", "tab('hotspots')", "Hotspots", show=False),
         Binding("6", "tab('flame')", "Flame", show=False),
+        Binding("tab", "next_tab", "Next tab", show=False, priority=True),
+        Binding("shift+tab", "previous_tab", "Previous tab", show=False, priority=True),
+        Binding("f", "focus_filter", "Filter"),
         Binding("s", "toggle_sort", "Sort self/total"),
         Binding("c", "clear_hotspots", "Clear samples"),
         Binding("m", "toggle_mode", "wall/gil"),
     ]
+
+    #: The widget that gets focus when a tab becomes active.
+    TAB_CONTENT = {
+        "threads": "#threads-table",
+        "tasks": "#tasks-tree",
+        "gc": "#gc-table",
+        "hotspots": "#hot-table",
+        "flame": "#flame-graph",
+    }
 
     def __init__(
         self,
@@ -449,7 +489,9 @@ class SgrudApp(App[int]):
                     yield StackPanel("", id="task-stack", classes="stack")
             with TabPane("GC", id="gc"):
                 yield DataTable(id="gc-table", cursor_type="row")
-                yield DataTable(id="gc-history", cursor_type="none")
+                history = DataTable(id="gc-history", cursor_type="none")
+                history.can_focus = False
+                yield history
             with TabPane("Process", id="process"):
                 yield Label("rss", classes="hist-label")
                 yield Sparkline([], id="memhist")
@@ -458,18 +500,18 @@ class SgrudApp(App[int]):
                 yield Static("", id="procinfo")
             with TabPane("Hotspots", id="hotspots"):
                 with Horizontal(id="hot-bar"):
-                    yield Select(
+                    yield ThreadFilter(
                         [("all threads", -1)], value=-1, allow_blank=False, id="hot-filter"
                     )
                     yield Static("", id="hot-info")
                 yield DataTable(id="hot-table", cursor_type="row", zebra_stripes=True)
             with TabPane("Flame", id="flame"):
                 with Horizontal(id="flame-bar"):
-                    yield Select(
+                    yield ThreadFilter(
                         [("all threads", -1)], value=-1, allow_blank=False, id="flame-filter"
                     )
                     yield Static("", id="flame-info")
-                with VerticalScroll(id="flame-scroll"):
+                with VerticalScroll(id="flame-scroll", can_focus=False):
                     yield FlameGraph(id="flame-graph")
                 yield Static("", id="flame-status")
         yield Footer()
@@ -484,6 +526,8 @@ class SgrudApp(App[int]):
         hot = self.query_one("#hot-table", DataTable)
         hot.add_columns("self%", "total%", "self", "total", "function", "file")
         self.query_one("#flame-scroll", VerticalScroll).anchor()
+        self.query_one(Tabs).can_focus = False
+        self._focus_content()
         if self.sampler is not None:
             self.sampler.start()
         self.refresh_snapshot()
@@ -519,8 +563,36 @@ class SgrudApp(App[int]):
     def action_tab(self, tab: str) -> None:
         self.query_one("#tabs", TabbedContent).active = tab
 
+    def action_next_tab(self) -> None:
+        self.query_one(Tabs).action_next_tab()
+
+    def action_previous_tab(self) -> None:
+        self.query_one(Tabs).action_previous_tab()
+
+    def action_focus_filter(self) -> None:
+        active = self.query_one("#tabs", TabbedContent).active
+        select = self.query_one(f"#{active}").query_one(ThreadFilter)
+        select.focus()
+        select.action_show_overlay()
+
+    def _focus_content(self) -> None:
+        active = self.query_one("#tabs", TabbedContent).active
+        selector = self.TAB_CONTENT.get(active)
+        if selector is None:
+            self.screen.set_focus(None)
+        else:
+            self.query_one(selector).focus()
+
+    @on(ThreadFilter.Closed)
+    def _filter_closed(self, event: ThreadFilter.Closed) -> None:
+        # Select re-focuses itself after a choice or escape. Only take the
+        # focus away in that case, not when the user clicked elsewhere.
+        if event.select.has_focus:
+            self._focus_content()
+
     #: Keys that only make sense (and only show in the footer) on some tabs.
     TAB_ACTIONS = {
+        "focus_filter": ("hotspots", "flame"),
         "toggle_sort": ("hotspots",),
         "clear_hotspots": ("hotspots", "flame"),
         "toggle_mode": ("hotspots", "flame"),
@@ -535,11 +607,10 @@ class SgrudApp(App[int]):
     @on(TabbedContent.TabActivated)
     def _tab_changed(self, event: TabbedContent.TabActivated) -> None:
         self.refresh_bindings()
-        if event.pane.id == "flame":
+        if event.pane.id == "flame" and self.snapshot:
             # The tree is only rebuilt while the tab is visible.
-            if self.snapshot:
-                self._update_flame(self.snapshot)
-            self.query_one(FlameGraph).focus()
+            self._update_flame(self.snapshot)
+        self._focus_content()
 
     def action_toggle_sort(self) -> None:
         self.hot_sort = "total" if self.hot_sort == "self" else "self"

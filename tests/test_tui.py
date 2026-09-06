@@ -2,7 +2,7 @@ import asyncio
 from typing import cast
 
 import pytest
-from textual.widgets import DataTable, Select, Tree
+from textual.widgets import DataTable, Select, TabbedContent, Tabs, Tree
 
 from sgrud import Monitor
 from sgrud.tui import SgrudApp, StackPanel, Summary
@@ -25,17 +25,34 @@ async def test_tui_renders_snapshot(monitor):
         stack = app.query_one("#thread-stack", StackPanel)
         assert stack.last_title.startswith("[")
         assert stack.last_frames
+        # Focus starts in the content, never on the tab bar.
+        assert table.has_focus
+        assert not app.query_one(Tabs).can_focus
 
         await pilot.press("2")
         await pilot.pause()
         tree = app.query_one("#tasks-tree", Tree)
         labels = [str(n.label) for n in tree.root.children]
         assert any("branch-0" in label for label in labels)
+        assert tree.has_focus
 
+        tabs = app.query_one("#tabs", TabbedContent)
+        await pilot.press("tab")
+        assert tabs.active == "gc"
+        assert app.query_one("#gc-table", DataTable).has_focus
+        await pilot.press("shift+tab")
+        assert tabs.active == "tasks"
+        # space belongs to the tree, p pauses.
         await pilot.press("space")
+        assert not app.paused
+        await pilot.press("p")
         assert app.paused
         await pilot.press("+")
         assert app.interval == pytest.approx(0.1)
+        await pilot.press("=")
+        assert app.interval == pytest.approx(0.1)
+        await pilot.press("-")
+        assert app.interval == pytest.approx(0.2)
         await pilot.press("q")
 
 
@@ -127,6 +144,24 @@ async def test_tui_hotspots_tab(monitor):
         assert "busy_loop" in funcs
         await pilot.press("s")
         assert app.hot_sort == "total"
+
+        # f opens the thread filter, a choice hands focus back to the table.
+        assert table.has_focus
+        await pilot.press("f")
+        await pilot.pause()
+        select = app.query_one("#hot-filter", Select)
+        assert select.expanded
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        assert not select.expanded
+        assert app.hot_thread == app.snapshot.threads[0].tid
+        assert table.has_focus
+        await pilot.press("f")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert table.has_focus
+
         before = app.hotspots.samples
         await pilot.press("c")
         await pilot.pause()

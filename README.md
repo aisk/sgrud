@@ -32,12 +32,16 @@ sgrud PID --profile 5 --mode gil count only the thread holding the GIL
 sgrud PID --profile 5 --folded   collapsed stacks for flamegraph.pl or speedscope
 ```
 
-Keys inside the TUI: `1`-`6` switch tabs, `space` pauses, `r` refreshes,
-`+` and `-` change the refresh interval, `q` quits. On the Hotspots and
-Flame tabs `m` toggles wall/gil mode and `c` clears the samples, and on
-Hotspots `s` toggles self/total ordering. Both tabs are fed by one
-background sampler (`--rate`, default 100 Hz) that keeps running while
-you look at the other tabs, and share the thread filter.
+Keys inside the TUI: `1`-`6` jump to a tab and `tab`/`shift+tab` step
+through them, `p` pauses, `r` refreshes, `+` and `-` change the refresh
+interval, `q` quits. Focus always sits in the current tab's content, so
+the arrow keys move through the thread table, the task tree or the flame
+graph right away. On the Hotspots and Flame tabs `f` opens the thread
+filter (pick with `enter`, `esc` cancels), `m` toggles wall/gil mode and
+`c` clears the samples, and on Hotspots `s` toggles self/total ordering.
+Both tabs are fed by one background sampler (`--rate`, default 100 Hz)
+that keeps running while you look at the other tabs, and share the thread
+filter.
 
 The Flame tab draws the sampled stacks as a flame graph with the root at
 the bottom. With all threads selected each thread is a block of its own
