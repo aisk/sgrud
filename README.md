@@ -1,5 +1,7 @@
 # sgrud
 
+**English** | [简体中文](docs/i18n/README.zh-CN.md) | [日本語](docs/i18n/README.ja.md) | [한국어](docs/i18n/README.ko.md) | [Tiếng Việt](docs/i18n/README.vi.md) | [Français](docs/i18n/README.fr.md) | [Deutsch](docs/i18n/README.de.md)
+
 sgrud (from Scottish Gaelic *sgrùd*, meaning "inspection" or "examination")
 is a diagnostic tool for inspecting running Python processes. Attach to a
 CPython process and watch its memory, CPU, threads, asyncio tasks, stacks

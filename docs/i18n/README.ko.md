@@ -1,0 +1,133 @@
+# sgrud
+
+[English](../../README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | **한국어** | [Tiếng Việt](README.vi.md) | [Français](README.fr.md) | [Deutsch](README.de.md)
+
+sgrud(스코틀랜드 게일어 *sgrùd*에서 유래했으며 "검사" 또는 "조사"를 뜻합니다)는
+실행 중인 Python 프로세스를 들여다보기 위한 진단 도구입니다. CPython 프로세스에
+붙어서 메모리, CPU, 스레드, asyncio 태스크, 스택, 가비지 컬렉터를 대상 프로세스를
+느리게 만들지 않고 관찰할 수 있습니다.
+
+sgrud는 대상을 멈추거나 계측 코드를 주입하지 않습니다. CPython 3.15의
+`_remote_debugging` 모듈(Tachyon 프로파일러와 `python -m asyncio ps`의 기반이 되는
+장치)을 통해 프로세스 메모리에서 인터프리터 상태를 직접 읽어 오고, 메모리와 CPU
+집계를 위해 `/proc`을 함께 사용합니다. 모든 스레드의 스택을 한 번 스냅샷하는 데
+수십 마이크로초가 들며 대상 쪽에는 아무런 비용이 없습니다.
+
+Linux와 CPython 3.15 이상이 필요합니다. 대상은 sgrud 자체와 같은 major.minor
+버전으로 실행되어야 합니다.
+
+## 사용법
+
+```
+sgrud PID                           대화형 터미널 인터페이스
+sgrud run -- python app.py          대상을 자식 프로세스로 시작하고 검사
+
+sgrud dump PID                      텍스트 스냅샷 한 번
+sgrud dump PID -n 0.5               대상이 종료될 때까지 0.5초마다 계속 출력
+sgrud dump PID --json               한 줄에 JSON 객체 하나
+sgrud dump run -- python app.py     `run -- CMD`는 어디서든 pid 대신 사용 가능
+
+sgrud profile PID                   5초 동안 스택을 샘플링하고 가장 뜨거운 함수를 출력
+sgrud profile PID -d 30 --mode gil  30초 동안 샘플링하되 GIL을 쥔 스레드만 집계
+sgrud profile PID --mode async      스레드 대신 asyncio 태스크를 샘플링
+sgrud profile PID --folded          flamegraph.pl이나 speedscope용 접힌 스택
+```
+
+`--no-stacks`, `--no-tasks`, `--no-gc`를 사용하면 필요 없는 섹션을 인터페이스나
+덤프에서 제외할 수 있습니다.
+
+### 샘플링 모드
+
+- **wall**: Python 스택을 가진 모든 스레드를 집계하므로 잠들어 있는 스레드도
+  바쁜 스레드와 같은 비중을 가집니다.
+- **gil**: GIL을 쥔 스레드만 집계합니다. "CPU가 어디에 쓰이는가"에 답합니다.
+- **async**: 스레드 스택 대신 asyncio 태스크를 샘플링합니다. `await`에서 멈춰
+  있는 코루틴은 어떤 스레드의 스택에도 없기 때문입니다. 각 리프 태스크가 하나의
+  스택이 되며, 자신의 프레임, `<task NAME>` 마커, 그 다음 루트까지 이 태스크를
+  기다리는 각 태스크의 프레임 순으로 이어집니다. 실행 중이든 중단 상태이든 모든
+  태스크를 집계하므로 "내 태스크들이 무엇을 기다리고 있는가"에 답합니다. 스택을
+  읽는 것보다 샘플당 비용이 크므로 실제 달성되는 샘플링 속도는 더 낮습니다.
+
+### TUI
+
+| 키 | 동작 |
+| --- | --- |
+| `1`-`6`, `tab`, `shift+tab` | 탭 전환 |
+| `p` / `r` | 일시 정지 / 새로 고침 |
+| `+` / `-` | 새로 고침 간격 변경 |
+| `q` | 종료 |
+| `f` | 스레드 필터 (Hotspots 및 Flame) |
+| `m` | wall/gil/async 모드 순환 (Hotspots 및 Flame) |
+| `c` | 샘플 지우기 (Hotspots 및 Flame) |
+| `s` | self/total 정렬 전환 (Hotspots) |
+| `enter` / `backspace` / `esc` | 확대 / 축소 / 초기화 (Flame) |
+
+화살표 키는 현재 탭의 내용을 바로 이동합니다. Hotspots와 Flame은 하나의 백그라운드
+샘플러(`--rate`, 기본 100 Hz)를 공유하며, 다른 탭을 보고 있는 동안에도 계속
+동작합니다. 플레임 그래프는 아래에서 위로 자라며 첫 번째 행에서 각 스레드에 고유한
+블록을 배정하므로, 유휴 스레드는 다른 스레드와 섞이지 않고 높은 기둥으로 나타납니다.
+
+## 라이브러리
+
+TUI는 프런트엔드일 뿐입니다. 모든 것은 `Monitor`에서 나오며, 단순한 frozen
+dataclass를 반환합니다:
+
+```python
+from sgrud import Monitor
+
+with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
+    snap = m.snapshot()  # snapshot(stacks=..., tasks=..., gc=...)
+    print(snap.process.memory.rss, snap.process.cpu_percent)
+    for t in snap.threads:
+        print(t.tid, t.name, t.status.describe(), t.cpu_percent, t.frames[:1])
+    for task in snap.tasks:
+        print(task.name, task.parent_ids, [f.funcname for f in task.frames])
+    print(snap.gc[0].collections, snap.gc[0].history[:1])
+    print(snap.to_dict())  # JSON friendly
+```
+
+`Monitor.stream(interval)`은 대상이 종료될 때까지 스냅샷을 생성한 뒤
+`ProcessExited`를 발생시킵니다. CPU 백분율은 두 개의 스냅샷이 필요하므로 첫 번째
+스냅샷에서는 `None`을 보고합니다.
+
+프로파일링의 경우 `Sampler`가 백그라운드 스레드에서 `Monitor.sample_stacks()`를
+실행하고 `Hotspots` 집계기에 결과를 공급합니다:
+
+```python
+from sgrud.sampler import Sampler
+
+with Sampler(monitor, rate=500, mode="gil") as sampler:
+    time.sleep(5)
+for row in sampler.hotspots.rows(sort="self", limit=10):
+    print(row.self_percent, row.funcname, row.filename)
+tree = sampler.hotspots.call_tree()  # merged call tree, one child per thread
+print("\n".join(sampler.hotspots.folded()))  # flamegraph.pl input
+```
+
+## 권한
+
+메모리, CPU, 스레드 이름은 `/proc`에서 가져오므로 자신이 소유한 모든 프로세스에
+대해 동작합니다. 그 외의 모든 것은 대상의 메모리를 읽으므로 ptrace 권한이
+필요한데, 기본값인 `kernel.yama.ptrace_scope=1`은 자식 프로세스에 대해서만 이
+권한을 허용합니다. 권한이 없으면 sgrud는 제한 모드로 붙고 무엇이 빠져 있는지
+설명하는 배너를 표시합니다. 모든 기능을 사용하려면 `sgrud run -- ...`으로 대상을
+시작하거나, `sudo`로 sgrud를 실행하거나, `CAP_SYS_PTRACE`를 부여하거나, 해당
+세션 동안 Yama를 완화하십시오:
+
+```
+echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
+```
+
+`Monitor.attach`에 `require_full=True`를 넘기면 기능을 축소하는 대신 실패합니다.
+`-X disable-remote-debug`로 시작된 대상도 검사할 수 있습니다. 그 플래그는 코드
+주입만 비활성화하는데, sgrud는 코드 주입을 사용하지 않기 때문입니다.
+
+## 개발
+
+```
+uv sync
+uv run pytest
+```
+
+테스트는 `tests/target_app.py`를 실행하고 검사하므로 실제 attach 경로를 그대로
+거칩니다. Textual 앱은 pilot을 통해 헤드리스로 테스트됩니다.
