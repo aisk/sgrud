@@ -235,7 +235,9 @@ class SgrudApp(App[int]):
                 yield Static("", id="procinfo")
             with TabPane("Hotspots", id="hotspots"):
                 with Horizontal(id="hot-bar"):
-                    yield Select([("all threads", -1)], value=-1, allow_blank=False, id="hot-filter")
+                    yield Select(
+                        [("all threads", -1)], value=-1, allow_blank=False, id="hot-filter"
+                    )
                     yield Static("", id="hot-info")
                 yield DataTable(id="hot-table", cursor_type="row", zebra_stripes=True)
         yield Footer()
@@ -315,7 +317,8 @@ class SgrudApp(App[int]):
 
     @on(Select.Changed, "#hot-filter")
     def _hot_filter_changed(self, event: Select.Changed) -> None:
-        self.hot_thread = None if event.value in (-1, Select.BLANK) else int(event.value)
+        value = event.value
+        self.hot_thread = value if isinstance(value, int) and value != -1 else None
         if self.snapshot:
             self._update_hotspots(self.snapshot)
 
@@ -409,7 +412,7 @@ class SgrudApp(App[int]):
 
     @on(DataTable.RowHighlighted, "#threads-table")
     def _thread_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        if event.row_key is None or self.snapshot is None:
+        if event.row_key is None or event.row_key.value is None or self.snapshot is None:
             return
         self._selected_tid = int(event.row_key.value)
         self._show_thread(self.snapshot.thread(self._selected_tid))
@@ -501,7 +504,8 @@ class SgrudApp(App[int]):
                 f"exe      {p.exe}",
                 f"cmdline  {' '.join(p.cmdline)}",
                 f"state    {p.state}    uptime {human_duration(p.uptime)}",
-                f"cpu      {percent(p.cpu_percent).strip()}%   user {p.user_time:.2f}s   sys {p.system_time:.2f}s",
+                f"cpu      {percent(p.cpu_percent).strip()}%"
+                f"   user {p.user_time:.2f}s   sys {p.system_time:.2f}s",
                 f"rss      {human_bytes(m.rss)}   peak {human_bytes(m.hwm)}",
                 f"vms      {human_bytes(m.vms)}   data {human_bytes(m.data)}",
                 f"shared   {human_bytes(m.shared)}   swap {human_bytes(m.swap)}",

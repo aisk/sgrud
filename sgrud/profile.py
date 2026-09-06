@@ -12,7 +12,7 @@ import threading
 import time
 from collections import Counter
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .models import Frame, Thread, ThreadStatus
 
@@ -42,12 +42,8 @@ class HotspotRow:
 @dataclass(slots=True)
 class _ThreadCounts:
     samples: int = 0
-    self_counts: Counter[FunctionKey] | None = None
-    total_counts: Counter[FunctionKey] | None = None
-
-    def __post_init__(self) -> None:
-        self.self_counts = Counter()
-        self.total_counts = Counter()
+    self_counts: Counter[FunctionKey] = field(default_factory=Counter)
+    total_counts: Counter[FunctionKey] = field(default_factory=Counter)
 
 
 class Hotspots:

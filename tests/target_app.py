@@ -31,7 +31,8 @@ async def branch(n):
 
 
 async def main():
-    tasks = [asyncio.create_task(branch(i), name=f"branch-{i}") for i in range(3)]
+    # Kept referenced so the tasks are not garbage collected mid-run.
+    tasks = [asyncio.create_task(branch(i), name=f"branch-{i}") for i in range(3)]  # noqa: F841
     threading.Thread(target=busy_loop, name="busy", daemon=True).start()
     threading.Thread(target=idle_loop, name="idle", daemon=True).start()
     await asyncio.sleep(0.05)

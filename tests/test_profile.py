@@ -69,9 +69,9 @@ def test_sampler_finds_busy_loop(monitor):
 def test_sampler_notices_exit():
     import sys
 
-    from sgrud import Monitor
-
     from conftest import TARGET
+
+    from sgrud import Monitor
 
     m = Monitor.spawn([sys.executable, str(TARGET), "--exit-after", "0.4"])
     with m, Sampler(m, rate=100) as sampler:

@@ -183,7 +183,7 @@ class RemoteInspector:
     def stacks(self) -> dict[int, tuple[int, ThreadStatus, tuple[Frame, ...]]]:
         """Map OS thread id to (interpreter_id, status, frames leaf-first)."""
         try:
-            result = self._unwinder.get_stack_trace()
+            result = self._live().get_stack_trace()
         except Exception as e:
             raise self._guard(e) from e
         out: dict[int, tuple[int, ThreadStatus, tuple[Frame, ...]]] = {}
@@ -205,7 +205,7 @@ class RemoteInspector:
         """
         for attempt in range(retries):
             try:
-                result = self._unwinder.get_all_awaited_by()
+                result = self._live().get_all_awaited_by()
                 break
             except RuntimeError as e:
                 # asyncio not imported in the target is a normal condition.
@@ -255,10 +255,15 @@ class RemoteInspector:
         return _convert_gc(raw)
 
     def pause(self) -> None:
-        self._unwinder.pause_threads()
+        self._live().pause_threads()
 
     def resume(self) -> None:
-        self._unwinder.resume_threads()
+        self._live().resume_threads()
+
+    def _live(self):
+        if self._unwinder is None:
+            raise RuntimeError("inspector is closed")
+        return self._unwinder
 
     def close(self) -> None:
         self._unwinder = None

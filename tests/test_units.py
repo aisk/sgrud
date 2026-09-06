@@ -104,7 +104,6 @@ def test_convert_gc_ring_buffer_with_cumulative_counters():
 def test_looks_like_python_heuristic():
     import os
     import subprocess
-    import sys
 
     from sgrud import procfs
 

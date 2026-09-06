@@ -22,6 +22,8 @@ sgrud = "sgrud.cli:main"
 dev = [
     "pytest>=8",
     "pytest-asyncio>=1.4.0",
+    "ruff>=0.14",
+    "ty>=0.0.1",
 ]
 
 [build-system]
@@ -33,3 +35,13 @@ packages = ["sgrud"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py315"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.ty.src]
+include = ["sgrud", "tests"]

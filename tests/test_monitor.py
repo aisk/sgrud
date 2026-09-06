@@ -3,11 +3,10 @@ import sys
 import time
 
 import pytest
+from conftest import TARGET, spawn_target
 
 from sgrud import AttachError, Monitor, ProcessExited, ThreadStatus
 from sgrud.format import format_snapshot
-
-from conftest import TARGET, spawn_target
 
 
 def test_process_section(snapshot, target):

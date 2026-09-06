@@ -16,6 +16,7 @@ def spawn_target(*extra: str) -> subprocess.Popen[bytes]:
         stdout=subprocess.PIPE,
     )
     if not extra:
+        assert proc.stdout is not None
         line = proc.stdout.readline()
         assert line.strip() == b"READY", line
     return proc
