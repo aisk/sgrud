@@ -148,3 +148,21 @@ def format_snapshot(
     for section, err in snap.errors.items():
         lines.append(f"! {section}: {err}")
     return "\n".join(lines)
+
+
+def format_hotspots(
+    rows, *, samples: int, rate: float | None = None, mode: str = "wall", limit: int = 25
+) -> str:
+    """Render hotspot rows (see :meth:`sgrud.profile.Hotspots.rows`) as a table."""
+    head = f"hotspots ({mode}): {samples} samples"
+    if rate:
+        head += f" at {rate:.0f}/s"
+    lines = [head, f"{'self%':>6} {'total%':>7} {'self':>7} {'total':>7}  function  file"]
+    for r in rows[:limit]:
+        lines.append(
+            f"{r.self_percent:6.1f} {r.total_percent:7.1f} {r.self_samples:7d} "
+            f"{r.total_samples:7d}  {r.funcname}  {short_path(r.filename)}"
+        )
+    if not rows:
+        lines.append("(no samples)")
+    return "\n".join(lines)

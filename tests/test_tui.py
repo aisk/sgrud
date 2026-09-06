@@ -106,3 +106,26 @@ async def test_tui_reports_process_exit():
     finally:
         proc.kill()
         proc.wait()
+
+
+async def test_tui_hotspots_tab(monitor):
+    app = SgrudApp(monitor, interval=0.2, sample_rate=200)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await asyncio.sleep(0.8)
+        await pilot.pause()
+        await pilot.press("5")
+        await pilot.pause()
+        assert app.sampler is not None and app.sampler.running
+        assert app.hotspots.samples > 20
+        table = app.query_one("#hot-table", DataTable)
+        assert table.row_count > 0
+        funcs = [str(table.get_row_at(i)[4]) for i in range(min(table.row_count, 5))]
+        assert "busy_loop" in funcs
+        await pilot.press("s")
+        assert app.hot_sort == "total"
+        before = app.hotspots.samples
+        await pilot.press("c")
+        await pilot.pause()
+        assert app.hotspots.samples < before / 2
+        await pilot.press("q")
+    assert not app.sampler.running

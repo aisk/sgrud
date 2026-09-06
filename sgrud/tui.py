@@ -23,6 +23,7 @@ from textual.widgets import (
     Footer,
     Header,
     Label,
+    Select,
     Sparkline,
     Static,
     TabbedContent,
@@ -34,6 +35,8 @@ from .errors import ProcessExited, SgrudError
 from .format import human_bytes, human_duration, percent, short_path
 from .models import Snapshot, Task, Thread, ThreadStatus
 from .monitor import Monitor
+from .profile import Hotspots
+from .sampler import Sampler
 
 HISTORY = 120
 
@@ -133,6 +136,9 @@ class SgrudApp(App[int]):
     DataTable { height: 1fr; }
     Tree { height: 1fr; }
     #memhist, #cpuhist { height: 3; }
+    #hot-bar { height: 3; }
+    #hot-filter { width: 40; }
+    #hot-info { padding: 1 2; color: $text-muted; }
     .hist-label { color: $text-muted; }
     #procinfo { padding: 1; }
     """
@@ -146,6 +152,10 @@ class SgrudApp(App[int]):
         Binding("2", "tab('tasks')", "Tasks", show=False),
         Binding("3", "tab('gc')", "GC", show=False),
         Binding("4", "tab('process')", "Process", show=False),
+        Binding("5", "tab('hotspots')", "Hotspots", show=False),
+        Binding("s", "toggle_sort", "Sort self/total"),
+        Binding("c", "clear_hotspots", "Clear samples"),
+        Binding("m", "toggle_mode", "wall/gil"),
     ]
 
     def __init__(
@@ -156,9 +166,16 @@ class SgrudApp(App[int]):
         stacks: bool = True,
         tasks: bool = True,
         gc: bool = True,
+        sample_rate: float = 100.0,
+        sample_mode: str = "wall",
     ):
         super().__init__()
         self.monitor = monitor
+        self.hotspots = Hotspots(sample_mode)
+        self.sampler = Sampler(monitor, self.hotspots, rate=sample_rate) if sample_rate > 0 else None
+        self.hot_sort = "self"
+        self.hot_thread: int | None = None
+        self._hot_options: tuple[int, ...] = ()
         self.interval = interval
         self.sections = dict(stacks=stacks, tasks=tasks, gc=gc)
         self.paused = False
@@ -198,6 +215,11 @@ class SgrudApp(App[int]):
                 yield Label("cpu %", classes="hist-label")
                 yield Sparkline([], id="cpuhist")
                 yield Static("", id="procinfo")
+            with TabPane("Hotspots", id="hotspots"):
+                with Horizontal(id="hot-bar"):
+                    yield Select([("all threads", -1)], value=-1, allow_blank=False, id="hot-filter")
+                    yield Static("", id="hot-info")
+                yield DataTable(id="hot-table", cursor_type="row", zebra_stripes=True)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -207,8 +229,16 @@ class SgrudApp(App[int]):
         gc.add_columns("gen", "collections", "collected", "uncollectable", "total time", "heap")
         hist = self.query_one("#gc-history", DataTable)
         hist.add_columns("gen", "duration", "collected", "candidates", "heap")
+        hot = self.query_one("#hot-table", DataTable)
+        hot.add_columns("self%", "total%", "self", "total", "function", "file")
+        if self.sampler is not None:
+            self.sampler.start()
         self.refresh_snapshot()
         self._timer = self.set_interval(self.interval, self.refresh_snapshot)
+
+    def on_unmount(self) -> None:
+        if self.sampler is not None:
+            self.sampler.stop()
 
     # -- actions -------------------------------------------------------
 
@@ -235,6 +265,29 @@ class SgrudApp(App[int]):
 
     def action_tab(self, tab: str) -> None:
         self.query_one("#tabs", TabbedContent).active = tab
+
+    def action_toggle_sort(self) -> None:
+        self.hot_sort = "total" if self.hot_sort == "self" else "self"
+        if self.snapshot:
+            self._update_hotspots(self.snapshot)
+
+    def action_toggle_mode(self) -> None:
+        # Samples are not comparable across modes, so start over.
+        self.hotspots.mode = "gil" if self.hotspots.mode == "wall" else "wall"
+        self.hotspots.reset()
+        if self.snapshot:
+            self._update_hotspots(self.snapshot)
+
+    def action_clear_hotspots(self) -> None:
+        self.hotspots.reset()
+        if self.snapshot:
+            self._update_hotspots(self.snapshot)
+
+    @on(Select.Changed, "#hot-filter")
+    def _hot_filter_changed(self, event: Select.Changed) -> None:
+        self.hot_thread = None if event.value in (-1, Select.BLANK) else int(event.value)
+        if self.snapshot:
+            self._update_hotspots(self.snapshot)
 
     def _set_interval(self, value: float) -> None:
         self.interval = value
@@ -265,6 +318,8 @@ class SgrudApp(App[int]):
             self._timer.stop()
             self._timer = None
         self.sub_title = str(exc)
+        if self.sampler is not None:
+            self.sampler.stop()
         self.notify(str(exc), severity="warning", timeout=10)
         self._update_summary()
         self._show_thread(None)
@@ -282,6 +337,7 @@ class SgrudApp(App[int]):
         self._update_tasks(snap)
         self._update_gc(snap)
         self._update_process(snap)
+        self._update_hotspots(snap)
 
     def _update_threads(self, snap: Snapshot) -> None:
         table = self.query_one("#threads-table", DataTable)
@@ -425,6 +481,45 @@ class SgrudApp(App[int]):
             ]
         )
         self.query_one("#procinfo", Static).update(info)
+
+
+    def _update_hotspots(self, snap: Snapshot) -> None:
+        select = self.query_one("#hot-filter", Select)
+        tids = tuple(t.tid for t in snap.threads)
+        if tids != self._hot_options:
+            self._hot_options = tids
+            options = [("all threads", -1)] + [
+                (f"{t.name} [{t.tid}]", t.tid) for t in snap.threads
+            ]
+            keep = self.hot_thread if self.hot_thread in tids else -1
+            select.set_options(options)
+            select.value = keep
+            if keep == -1:
+                self.hot_thread = None
+        hot = self.hotspots
+        rows = hot.rows(thread=self.hot_thread, sort=self.hot_sort, limit=200)
+        info = Text()
+        if self.sampler is None:
+            info.append("sampling disabled (--rate 0)", "dim")
+        else:
+            state = "stopped" if not self.sampler.running else "sampling"
+            info.append(f"{state} at {hot.rate():.0f}/s, {hot.samples} samples")
+            if self.sampler.errors:
+                info.append(f", {self.sampler.errors} failed", "yellow")
+        info.append(f"  mode: {hot.mode}", "cyan")
+        info.append(f"  sort: {self.hot_sort}", "cyan")
+        self.query_one("#hot-info", Static).update(info)
+        table = self.query_one("#hot-table", DataTable)
+        table.clear()
+        for r in rows:
+            table.add_row(
+                f"{r.self_percent:5.1f}",
+                f"{r.total_percent:5.1f}",
+                str(r.self_samples),
+                str(r.total_samples),
+                Text(r.funcname, style="dim" if r.synthetic else ""),
+                short_path(r.filename),
+            )
 
 
 def run_tui(monitor: Monitor, **options) -> int:

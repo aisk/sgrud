@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -42,6 +43,9 @@ class Monitor:
         self.pid = pid
         self._child = child
         self._inspector: RemoteInspector | None = None
+        # The unwinder keeps per-call caches, so serialize access to it when a
+        # background Sampler and the UI thread share one Monitor.
+        self._lock = threading.Lock()
         self._inspector_opts = dict(
             native=native_frames, gc_markers=gc_markers, cache_frames=cache_frames
         )
@@ -141,9 +145,27 @@ class Monitor:
         self.close()
 
     def _get_inspector(self) -> RemoteInspector:
-        if self._inspector is None:
-            self._inspector = RemoteInspector(self.pid, **self._inspector_opts)
-        return self._inspector
+        with self._lock:
+            if self._inspector is None:
+                self._inspector = RemoteInspector(self.pid, **self._inspector_opts)
+            return self._inspector
+
+    def sample_stacks(self) -> dict[int, tuple[int, ThreadStatus, tuple]]:
+        """Read only the Python stacks, as fast as possible.
+
+        Returns a mapping of OS thread id to (interpreter_id, status, frames).
+        This is what a profiler wants to call hundreds of times per second.
+        Raises ProcessExited when the target is gone.
+        """
+        inspector = self._get_inspector()
+        with self._lock:
+            try:
+                return inspector.stacks()
+            except ProcessExited:
+                raise
+            except Exception:
+                self._check_alive()
+                raise
 
     def _check_alive(self) -> None:
         if self._child is not None and self._child.poll() is not None:
@@ -210,7 +232,8 @@ class Monitor:
                 errors["attach"] = str(e)
         if stacks and inspector is not None:
             try:
-                remote = inspector.stacks()
+                with self._lock:
+                    remote = inspector.stacks()
             except ProcessExited:
                 raise
             except Exception as e:
@@ -248,7 +271,8 @@ class Monitor:
         task_list = ()
         if tasks and inspector is not None:
             try:
-                task_list = inspector.tasks()
+                with self._lock:
+                    task_list = inspector.tasks()
             except ProcessExited:
                 raise
             except Exception as e:
@@ -257,7 +281,8 @@ class Monitor:
         gc_list = ()
         if gc and inspector is not None:
             try:
-                gc_list = inspector.gc()
+                with self._lock:
+                    gc_list = inspector.gc()
             except ProcessExited:
                 raise
             except Exception as e:

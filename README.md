@@ -26,8 +26,20 @@ sgrud tui run -- python app.py
 
 `--no-stacks`, `--no-tasks` and `--no-gc` drop sections you do not need.
 
-Keys inside the TUI: `1`-`4` switch tabs, `space` pauses, `r` refreshes,
-`+` and `-` change the refresh interval, `q` quits.
+```
+sgrud PID --profile 5            sample stacks for 5 s, print the hottest functions
+sgrud PID --profile 5 --mode gil count only the thread holding the GIL
+```
+
+Keys inside the TUI: `1`-`5` switch tabs, `space` pauses, `r` refreshes,
+`+` and `-` change the refresh interval, `q` quits. On the Hotspots tab
+`s` toggles self/total ordering, `m` toggles wall/gil mode and `c` clears
+the samples. The tab is fed by a background sampler (`--rate`, default
+100 Hz) that keeps running while you look at the other tabs.
+
+In wall mode every thread with a Python stack counts, so a sleeping thread
+weighs as much as a busy one. In gil mode only the GIL holder counts, which
+answers "where does the CPU time go" for CPython code.
 
 ## Library
 
@@ -51,6 +63,18 @@ with Monitor.attach(pid) as m:          # or Monitor.spawn(["python", "app.py"])
 `Monitor.stream(interval)` yields snapshots until the target exits, at which
 point it raises `ProcessExited`. CPU percentages need two snapshots, so the
 first one reports `None`.
+
+For profiling, `Sampler` runs `Monitor.sample_stacks()` in a background
+thread and feeds a `Hotspots` aggregator:
+
+```python
+from sgrud.sampler import Sampler
+
+with Sampler(monitor, rate=500, mode="gil") as sampler:
+    time.sleep(5)
+for row in sampler.hotspots.rows(sort="self", limit=10):
+    print(row.self_percent, row.funcname, row.filename)
+```
 
 ## Permissions
 

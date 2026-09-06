@@ -3,6 +3,7 @@
     sgrud PID                 one text snapshot
     sgrud PID -n 0.5          keep printing snapshots every 0.5 s
     sgrud PID --json          JSON lines instead of text
+    sgrud PID --profile 5     sample stacks for 5 s and print the hottest functions
     sgrud run -- python app.py    spawn the target as a child, then inspect it
     sgrud tui PID             interactive Textual interface
     sgrud tui run -- python app.py
@@ -11,8 +12,10 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import sys
+import time
 from collections.abc import Sequence
 
 from . import __name__ as _pkg
@@ -47,11 +50,22 @@ def build_parser() -> argparse.ArgumentParser:
     dump.add_argument("-c", "--count", type=int, default=None, help="stop after N snapshots")
     dump.add_argument("--json", action="store_true", help="emit one JSON object per line")
     dump.add_argument("--max-frames", type=int, default=None, help="frames per thread to show")
+    dump.add_argument("--profile", type=float, metavar="SECONDS", default=None,
+                      help="sample stacks for SECONDS and print a hotspot table instead")
+    dump.add_argument("--rate", type=float, default=200.0, help="samples per second for --profile")
+    dump.add_argument("--sort", choices=("self", "total"), default="self",
+                      help="hotspot ordering for --profile")
+    dump.add_argument("--mode", choices=("wall", "gil"), default="wall",
+                      help="count every thread (wall) or only the GIL holder (gil)")
 
     tui = sub.add_parser("tui", help="interactive terminal interface")
     _add_target(tui)
     _add_sections(tui)
     tui.add_argument("-n", "--interval", type=float, default=1.0, help="refresh interval")
+    tui.add_argument("--rate", type=float, default=100.0,
+                     help="background stack samples per second for the Hotspots tab, 0 to disable")
+    tui.add_argument("--mode", choices=("wall", "gil"), default="wall",
+                     help="initial hotspot mode, toggle with `m` in the TUI")
     return parser
 
 
@@ -77,11 +91,11 @@ def _dump(args: argparse.Namespace) -> int:
     produced = 0
     try:
         with monitor:
+            if args.profile is not None:
+                return _profile(monitor, args)
             if args.interval is None:
                 # A second sample a moment later gives meaningful CPU percentages.
                 monitor.snapshot(stacks=False, tasks=False, gc=False)
-                import time
-
                 time.sleep(0.1)
                 snaps = iter([monitor.snapshot(**sections)])
             else:
@@ -113,6 +127,30 @@ def _dump(args: argparse.Namespace) -> int:
     return 0
 
 
+def _profile(monitor: Monitor, args: argparse.Namespace) -> int:
+    from .format import format_hotspots
+    from .sampler import Sampler
+
+    sampler = Sampler(monitor, rate=args.rate, mode=args.mode)
+    with sampler:
+        deadline = time.monotonic() + args.profile
+        while time.monotonic() < deadline and sampler.exited is None:
+            time.sleep(0.05)
+    hot = sampler.hotspots
+    if args.json:
+        rows = [dataclasses.asdict(r) for r in hot.rows(sort=args.sort)]
+        print(json.dumps({"samples": hot.samples, "rate": hot.rate(), "mode": hot.mode,
+                          "errors": sampler.errors, "rows": rows}))
+    else:
+        print(format_hotspots(hot.rows(sort=args.sort), samples=hot.samples, rate=hot.rate(),
+                              mode=hot.mode))
+        if sampler.errors:
+            print(f"({sampler.errors} samples failed, last: {sampler.last_error})")
+    if sampler.exited is not None:
+        print(f"sgrud: {sampler.exited}", file=sys.stderr)
+    return 0
+
+
 def _tui(args: argparse.Namespace) -> int:
     from .tui import run_tui
 
@@ -127,6 +165,8 @@ def _tui(args: argparse.Namespace) -> int:
         stacks=not args.no_stacks,
         tasks=not args.no_tasks,
         gc=not args.no_gc,
+        sample_rate=args.rate,
+        sample_mode=args.mode,
     )
 
 
