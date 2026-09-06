@@ -21,7 +21,7 @@ def test_process_section(snapshot, target):
     assert not snapshot.errors, snapshot.errors
 
 
-def test_threads_have_names_status_and_stacks(snapshot):
+def test_threads_have_names_status_and_stacks(snapshot, monitor):
     by_name = {t.name: t for t in snapshot.threads}
     assert {"busy", "idle"} <= set(by_name)
     main = [t for t in snapshot.threads if t.is_main]
@@ -37,7 +37,16 @@ def test_threads_have_names_status_and_stacks(snapshot):
     idle = by_name["idle"]
     assert idle.frames[0].funcname == "idle_loop"
     assert idle.cpu_percent is not None and idle.cpu_percent < 5
-    assert not (idle.status & ThreadStatus.ON_CPU)
+    # The sleeping thread wakes every 0.2s and can be caught in state R at the
+    # sampling instant, so give the flag a few chances to read as off-CPU.
+    idle_statuses = [idle.status]
+    for _ in range(5):
+        if any(not (s & ThreadStatus.ON_CPU) for s in idle_statuses):
+            break
+        time.sleep(0.05)
+        again = {t.tid: t for t in monitor.snapshot(tasks=False, gc=False).threads}
+        idle_statuses.append(again[idle.tid].status)
+    assert any(not (s & ThreadStatus.ON_CPU) for s in idle_statuses), idle_statuses
 
     # A thread sleeping inside time.sleep sits under a <native> marker frame.
     assert any(f.synthetic and f.funcname == "<native>" for f in idle.frames)
