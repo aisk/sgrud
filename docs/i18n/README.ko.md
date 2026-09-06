@@ -2,7 +2,7 @@
 
 [English](../../README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | **한국어** | [Tiếng Việt](README.vi.md) | [Français](README.fr.md) | [Deutsch](README.de.md)
 
-sgrud(스코틀랜드 게일어 *sgrùd*에서 유래했으며 "검사" 또는 "조사"를 뜻합니다)는
+sgrud(스코틀랜드 게일어 *sgrùd*에서 유래했으며 "검사(檢査)" 또는 "조사(調査)"를 뜻합니다)는
 실행 중인 Python 프로세스를 들여다보기 위한 진단 도구입니다. CPython 프로세스에
 붙어서 메모리, CPU, 스레드, asyncio 태스크, 스택, 가비지 컬렉터를 대상 프로세스를
 느리게 만들지 않고 관찰할 수 있습니다.

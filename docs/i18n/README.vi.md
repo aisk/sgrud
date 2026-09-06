@@ -2,8 +2,8 @@
 
 [English](../../README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | **Tiếng Việt** | [Français](README.fr.md) | [Deutsch](README.de.md)
 
-sgrud (bắt nguồn từ tiếng Gael Scotland *sgrùd*, nghĩa là "kiểm tra" hay
-"khảo sát") là một công cụ chẩn đoán dùng để quan sát các tiến trình Python
+sgrud (bắt nguồn từ tiếng Gael Scotland *sgrùd*, nghĩa là "kiểm tra (檢查)" hay
+"khảo sát (考察)") là một công cụ chẩn đoán dùng để quan sát các tiến trình Python
 đang chạy. Gắn vào một tiến trình CPython và theo dõi bộ nhớ, CPU, các thread,
 các task asyncio, stack và bộ thu gom rác của nó mà không làm nó chậm đi.
 
