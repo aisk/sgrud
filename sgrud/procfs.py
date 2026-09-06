@@ -156,5 +156,5 @@ def can_read_memory(pid: int) -> bool:
 def ptrace_scope() -> int | None:
     try:
         return int(_read("/proc/sys/kernel/yama/ptrace_scope").strip())
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None

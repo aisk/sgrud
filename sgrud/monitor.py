@@ -190,9 +190,7 @@ class Monitor:
 
     # -- sampling ------------------------------------------------------
 
-    def _cpu_percent(
-        self, key: int | None, now: float, cpu_seconds: float
-    ) -> float | None:
+    def _cpu_percent(self, key: int | None, now: float, cpu_seconds: float) -> float | None:
         store = self._thread_cpu
         prev = self._proc_cpu if key is None else store.get(key)
         sample = _CpuSample(now, cpu_seconds)

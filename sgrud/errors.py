@@ -25,9 +25,7 @@ class AttachError(SgrudError):
     ``hint`` carries a human readable suggestion on how to fix it.
     """
 
-    def __init__(
-        self, pid: int, message: str, hint: str | None = None, *, transient: bool = False
-    ):
+    def __init__(self, pid: int, message: str, hint: str | None = None, *, transient: bool = False):
         self.pid = pid
         self.hint = hint
         #: True when the target may simply still be starting up.

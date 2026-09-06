@@ -60,9 +60,16 @@ def test_task_tree_handles_cycles():
 
 def _gc_item(gen, collections, collected=0, candidates=0, duration=0.0, heap=0, ts=0):
     return SimpleNamespace(
-        gen=gen, iid=0, ts_start=ts, ts_stop=ts + 1, collections=collections,
-        collected=collected, uncollectable=0, candidates=candidates,
-        heap_size=heap, duration=duration,
+        gen=gen,
+        iid=0,
+        ts_start=ts,
+        ts_stop=ts + 1,
+        collections=collections,
+        collected=collected,
+        uncollectable=0,
+        candidates=candidates,
+        heap_size=heap,
+        duration=duration,
     )
 
 

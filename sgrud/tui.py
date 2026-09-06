@@ -129,8 +129,9 @@ class StackPanel(Static):
             self.update(Group(header, Text("  (no Python frames)", style="dim")))
             return
         table = Table.grid(padding=(0, 2))
-        table.add_column(no_wrap=True, overflow="ellipsis", min_width=24,
-                         style="dim" if stale else "")
+        table.add_column(
+            no_wrap=True, overflow="ellipsis", min_width=24, style="dim" if stale else ""
+        )
         table.add_column(no_wrap=True, overflow="ellipsis", style="dim")
         for f in self.last_frames:
             where = "" if f.synthetic else f"{short_path(f.filename)}:{f.lineno}"
@@ -139,7 +140,14 @@ class StackPanel(Static):
 
 
 _FLAME_COLORS = (
-    "#d9432f", "#e8622e", "#f07f2f", "#f39a33", "#f5b23a", "#f7c948", "#e0993a", "#cc5a2b",
+    "#d9432f",
+    "#e8622e",
+    "#f07f2f",
+    "#f39a33",
+    "#f5b23a",
+    "#f7c948",
+    "#e0993a",
+    "#cc5a2b",
 )
 _FLAME_THREAD = "black on #7aa6c2"
 _FLAME_SYNTHETIC = "black on #9e9e9e"
@@ -727,8 +735,9 @@ class SgrudApp(App[int]):
             panel.show("no thread selected", ())
         else:
             reason = "process exited" if self.exited else "thread gone"
-            panel.show(f"[{last.tid}] {last.name}  ({reason}, last seen stack)",
-                       last.frames, stale=True)
+            panel.show(
+                f"[{last.tid}] {last.name}  ({reason}, last seen stack)", last.frames, stale=True
+            )
 
     @on(DataTable.RowHighlighted, "#threads-table")
     def _thread_highlighted(self, event: DataTable.RowHighlighted) -> None:
@@ -779,8 +788,9 @@ class SgrudApp(App[int]):
             panel.show("select a task", ())
         else:
             reason = "process exited" if self.exited else "task finished"
-            panel.show(f"{last.name} (0x{last.id:x})  ({reason}, last seen stack)",
-                       last.frames, stale=True)
+            panel.show(
+                f"{last.name} (0x{last.id:x})  ({reason}, last seen stack)", last.frames, stale=True
+            )
 
     @on(Tree.NodeHighlighted, "#tasks-tree")
     def _task_highlighted(self, event: Tree.NodeHighlighted) -> None:
@@ -833,7 +843,6 @@ class SgrudApp(App[int]):
             ]
         )
         self.query_one("#procinfo", Static).update(info)
-
 
     def _sync_thread_filters(self, snap: Snapshot) -> None:
         tids = tuple(t.tid for t in snap.threads)

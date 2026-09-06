@@ -84,10 +84,12 @@ def test_sampler_notices_exit():
 
 def test_hotspots_gil_mode_filters_by_status():
     hot = Hotspots("gil")
-    hot.add({
-        1: (0, ThreadStatus.HAS_GIL, (_f("running"),)),
-        2: (0, ThreadStatus.NONE, (_f("waiting"),)),
-    })
+    hot.add(
+        {
+            1: (0, ThreadStatus.HAS_GIL, (_f("running"),)),
+            2: (0, ThreadStatus.NONE, (_f("waiting"),)),
+        }
+    )
     names = [r.funcname for r in hot.rows()]
     assert names == ["running"]
     assert hot.thread_ids == [1]

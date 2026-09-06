@@ -44,8 +44,16 @@ _REQUIRED_FIELDS = {
     "TaskInfo": ("task_id", "task_name", "coroutine_stack", "awaited_by"),
     "CoroInfo": ("call_stack", "task_name"),
     "GCStatsInfo": (
-        "gen", "iid", "ts_start", "ts_stop", "collections", "collected",
-        "uncollectable", "candidates", "heap_size", "duration",
+        "gen",
+        "iid",
+        "ts_start",
+        "ts_stop",
+        "collections",
+        "collected",
+        "uncollectable",
+        "candidates",
+        "heap_size",
+        "duration",
     ),
 }
 
@@ -219,9 +227,7 @@ class RemoteInspector:
         tasks: list[Task] = []
         for awaited in result:
             for t in awaited.awaited_by:
-                frames = tuple(
-                    _frame(f) for coro in t.coroutine_stack for f in coro.call_stack
-                )
+                frames = tuple(_frame(f) for coro in t.coroutine_stack for f in coro.call_stack)
                 awaiters = tuple(
                     Awaiter(task_id=int(a.task_name), frames=_frames(a.call_stack))
                     for a in t.awaited_by
