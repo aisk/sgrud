@@ -1,7 +1,10 @@
 """Tests that need no target process."""
 
 import math
+import sys
 from types import SimpleNamespace
+
+import pytest
 
 from sgrud.format import format_task_tree, human_bytes, human_duration
 from sgrud.models import Awaiter, Frame, Memory, Process, Snapshot, Task, ThreadStatus
@@ -122,3 +125,38 @@ def test_looks_like_python_heuristic():
     finally:
         proc.kill()
         proc.wait()
+
+
+def test_web_command_carries_terminal_options():
+    from sgrud.cli import build_parser
+    from sgrud.web import web_command
+
+    args = build_parser().parse_args(
+        ["top", "run", "--web", "--no-gc", "--no-native", "-n", "0.5", "--mode", "gil"]
+    )
+    argv = web_command(args, 4321)
+    assert argv[:3] == [sys.executable, "-m", "sgrud"]
+    assert argv[3] == "4321"
+    assert argv[4:] == ["-n", "0.5", "--rate", "100.0", "--mode", "gil", "--no-gc", "--no-native"]
+
+
+def test_web_flags_default_to_loopback():
+    from sgrud.cli import build_parser
+
+    args = build_parser().parse_args(["top", "123"])
+    assert not args.web
+    assert (args.host, args.port) == ("127.0.0.1", 8000)
+
+
+@pytest.mark.asyncio
+async def test_web_page_urls_follow_the_host_header():
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from sgrud.web import _Server
+
+    server = _Server("true", host="0.0.0.0", port=8000)
+    async with TestClient(TestServer(await server._make_app())) as client:
+        resp = await client.get("/", headers={"Host": "box.example:9000"})
+        html = await resp.text()
+    assert 'src="http://box.example:9000/static/js/textual.js"' in html
+    assert 'websocket-url="ws://box.example:9000/ws"' in html

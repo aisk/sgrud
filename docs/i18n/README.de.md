@@ -25,6 +25,7 @@ anderen fehlt.
 ```
 sgrud PID                           interaktive Terminaloberfläche
 sgrud run -- python app.py          das Ziel als Kindprozess starten und untersuchen
+sgrud PID --web                     dieselbe Oberfläche im Browser
 
 sgrud dump PID                      ein Textschnappschuss
 sgrud dump PID -n 0.5               alle 0,5 s weiter ausgeben, bis das Ziel beendet ist
@@ -74,6 +75,19 @@ Hotspots und Flame teilen sich einen Hintergrund-Sampler (`--rate`, Standard
 Graph wächst von unten nach oben und gibt jedem Thread in der ersten Zeile
 einen eigenen Block, sodass ein untätiger Thread als hohe Säule erscheint,
 statt mit den anderen vermischt zu werden.
+
+### Web
+
+`--web` stellt dieselbe Oberfläche über
+[textual-serve](https://github.com/Textualize/textual-serve) im Browser bereit.
+Das ist eine optionale Abhängigkeit, installieren Sie dafür `sgrud[web]`.
+Gelauscht wird auf `http://127.0.0.1:8000`, sofern `--host` und `--port` nichts
+anderes sagen. Jeder Browser-Tab bekommt eine eigene Kopie der Oberfläche, die
+an dasselbe Ziel angehängt ist. Es gibt keine Authentifizierung, also lassen Sie
+es auf localhost oder hinter etwas, das eine bereitstellt.
+Unter Linux wird das Ziel bei
+`run -- CMD` so gestartet, dass jeder Prozess desselben Benutzers es lesen darf,
+da die Browser-Sitzungen nicht sein Elternprozess sind.
 
 ## Bibliothek
 

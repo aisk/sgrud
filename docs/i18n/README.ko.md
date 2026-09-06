@@ -22,6 +22,7 @@ CPython 3.15 이상이 필요하며 Linux, macOS, Windows에서 동작합니다.
 ```
 sgrud PID                           대화형 터미널 인터페이스
 sgrud run -- python app.py          대상을 자식 프로세스로 시작하고 검사
+sgrud PID --web                     같은 화면을 브라우저로 제공
 
 sgrud dump PID                      텍스트 스냅샷 한 번
 sgrud dump PID -n 0.5               대상이 종료될 때까지 0.5초마다 계속 출력
@@ -67,6 +68,16 @@ sgrud profile PID --folded          flamegraph.pl이나 speedscope용 접힌 스
 샘플러(`--rate`, 기본 100 Hz)를 공유하며, 다른 탭을 보고 있는 동안에도 계속
 동작합니다. 플레임 그래프는 아래에서 위로 자라며 첫 번째 행에서 각 스레드에 고유한
 블록을 배정하므로, 유휴 스레드는 다른 스레드와 섞이지 않고 높은 기둥으로 나타납니다.
+
+### Web
+
+`--web`을 주면 같은 화면을 [textual-serve](https://github.com/Textualize/textual-serve)를
+통해 브라우저로 제공합니다. 선택 의존성이므로 `sgrud[web]`을 설치하세요. 기본으로
+`http://127.0.0.1:8000`에서 대기하며 `--host`와 `--port`로 바꿀 수 있습니다.
+브라우저 탭마다 같은 대상에 붙는 독립된 화면이 하나씩 생깁니다. 인증이 없으므로
+localhost에만 두거나 인증을 제공하는 무언가 뒤에 두세요.
+Linux에서 `run -- CMD`를 쓰면 브라우저 세션이 대상의 부모가 아니므로, 대상은
+같은 사용자의 어떤 프로세스든 읽을 수 있도록 시작됩니다.
 
 ## 라이브러리
 

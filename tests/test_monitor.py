@@ -225,3 +225,26 @@ def test_attach_without_ptrace_falls_back_to_limited_mode(tmp_path):
         assert set(snap.errors) == {"attach"}
     finally:
         os.kill(pid, signal.SIGKILL)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Yama ptrace_scope is Linux only")
+def test_allow_ptrace_lets_a_sibling_inspect_a_run_target():
+    import subprocess
+
+    from sgrud.web import allow_ptrace
+
+    child = subprocess.Popen(allow_ptrace([sys.executable, str(TARGET)]), stdout=subprocess.PIPE)
+    try:
+        assert child.stdout is not None and child.stdout.readline().strip() == b"READY"
+        sibling = subprocess.run(
+            [sys.executable, "-m", "sgrud", "dump", str(child.pid), "--no-gc"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    finally:
+        child.kill()
+        child.wait()
+    assert sibling.returncode == 0, sibling.stderr
+    assert "limited mode" not in sibling.stderr
+    assert "busy_loop" in sibling.stdout

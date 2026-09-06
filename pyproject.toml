@@ -16,6 +16,9 @@ dependencies = [
     "textual>=8.0",
 ]
 
+[project.optional-dependencies]
+web = ["textual-serve>=1.1"]
+
 [project.scripts]
 sgrud = "sgrud.cli:main"
 
@@ -23,6 +26,7 @@ sgrud = "sgrud.cli:main"
 dev = [
     "pytest>=8",
     "pytest-asyncio>=1.4.0",
+    "textual-serve>=1.1",
     "ruff>=0.14",
     "ty>=0.0.1",
 ]

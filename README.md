@@ -25,6 +25,7 @@ picture, see [Platforms](#platforms) for what the others lack.
 ```
 sgrud PID                           interactive terminal interface
 sgrud run -- python app.py          start the target as a child and inspect it
+sgrud PID --web                     the same interface served to a browser
 
 sgrud dump PID                      one text snapshot
 sgrud dump PID -n 0.5               keep printing every 0.5 s until the target exits
@@ -71,6 +72,18 @@ Flame share one background sampler (`--rate`, default 100 Hz) that keeps
 running while you look at other tabs. The flame graph grows from the bottom
 and gives each thread its own block on the first row, so an idle thread
 shows up as a tall column instead of being mixed into the others.
+
+### Web
+
+`--web` serves the same interface to a browser through
+[textual-serve](https://github.com/Textualize/textual-serve), which is an
+optional dependency, so install `sgrud[web]` to get it. It listens on
+`http://127.0.0.1:8000` unless `--host` and `--port` say otherwise. Every
+browser tab gets its own copy of the interface attached to the same
+target. There is no authentication, so keep it on localhost or behind
+something that provides one. With `run -- CMD` on Linux the target is
+started allowing any process of the same user to read it, since the
+browser sessions are not its parent.
 
 ## Library
 

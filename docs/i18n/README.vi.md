@@ -23,6 +23,7 @@ tin nhất, xem [Nền tảng](#nền-tảng) để biết các nền tảng kh�
 ```
 sgrud PID                           giao diện terminal tương tác
 sgrud run -- python app.py          khởi chạy tiến trình đích như tiến trình con rồi quan sát nó
+sgrud PID --web                     cùng giao diện đó nhưng mở trong trình duyệt
 
 sgrud dump PID                      một ảnh chụp dạng văn bản
 sgrud dump PID -n 0.5               in liên tục mỗi 0.5 s cho đến khi tiến trình đích thoát
@@ -71,6 +72,17 @@ Flame dùng chung một bộ lấy mẫu chạy nền (`--rate`, mặc định 1
 tục hoạt động khi bạn xem các tab khác. Biểu đồ flame mọc từ dưới lên và
 dành cho mỗi thread một khối riêng ở hàng đầu tiên, nên một thread nhàn rỗi
 sẽ hiện thành một cột cao thay vì bị trộn lẫn với các thread khác.
+
+### Web
+
+`--web` đưa cùng giao diện đó lên trình duyệt thông qua
+[textual-serve](https://github.com/Textualize/textual-serve). Đây là phụ thuộc
+tùy chọn, hãy cài `sgrud[web]` để có nó. Mặc định lắng nghe tại
+`http://127.0.0.1:8000`, đổi bằng `--host` và `--port`. Mỗi tab trình duyệt có
+một bản giao diện riêng gắn vào cùng tiến trình đích. Không có xác thực, nên hãy
+giữ nó ở localhost hoặc đặt sau thứ gì đó có xác thực.
+Trên Linux với `run -- CMD`, tiến trình đích được khởi chạy sao cho mọi tiến trình
+cùng người dùng đều đọc được nó, vì các phiên trình duyệt không phải cha của nó.
 
 ## Thư viện
 

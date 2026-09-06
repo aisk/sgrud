@@ -1,6 +1,7 @@
 """Command line interface.
 
 sgrud PID                     interactive terminal interface
+sgrud PID --web               the same interface served to a browser
 sgrud run -- python app.py    spawn the target as a child, then inspect it
 sgrud dump PID                one text snapshot
 sgrud dump PID -n 0.5         keep printing snapshots every 0.5 s
@@ -75,6 +76,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="background stack samples per second for the Hotspots tab, 0 to disable",
     )
     _add_mode(top, "initial hotspot mode, cycle with `m` in the TUI")
+    top.add_argument(
+        "--web",
+        action="store_true",
+        help="serve the interface to a browser instead of the terminal (needs sgrud[web])",
+    )
+    top.add_argument("--host", default="127.0.0.1", help="address to serve on (default 127.0.0.1)")
+    top.add_argument("--port", type=int, default=8000, help="port to serve on (default 8000)")
 
     dump = sub.add_parser("dump", help="print snapshots as text or JSON")
     _add_target(dump)
@@ -234,11 +242,25 @@ def _print_hotspots(monitor: Monitor, sampler: Sampler, args: argparse.Namespace
 def _top(args: argparse.Namespace) -> int:
     from .tui import run_tui
 
+    command = args.command_argv
+    if args.web:
+        try:
+            from . import web
+        except ImportError:
+            print(
+                "sgrud: --web needs textual-serve, install it with `pip install sgrud[web]`",
+                file=sys.stderr,
+            )
+            return 1
+        if args.target == "run":
+            command = web.allow_ptrace(command)
     try:
-        monitor = open_monitor(args.target, args.command_argv, native_frames=not args.no_native)
+        monitor = open_monitor(args.target, command, native_frames=not args.no_native)
     except SgrudError as e:
         print(f"sgrud: {e}", file=sys.stderr)
         return 1
+    if args.web:
+        return web.serve(monitor, args)
     return run_tui(
         monitor,
         interval=args.interval,

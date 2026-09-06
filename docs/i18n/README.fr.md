@@ -26,6 +26,7 @@ manque aux autres.
 ```
 sgrud PID                           interface interactive dans le terminal
 sgrud run -- python app.py          lance la cible comme processus enfant et l'inspecte
+sgrud PID --web                     la même interface servie dans un navigateur
 
 sgrud dump PID                      un instantané texte
 sgrud dump PID -n 0.5               continue d'afficher toutes les 0,5 s jusqu'à la fin de la cible
@@ -77,6 +78,19 @@ consultez d'autres onglets. Le graphe en flammes pousse depuis le bas et
 attribue à chaque thread son propre bloc sur la première ligne, si bien
 qu'un thread inactif apparaît comme une grande colonne au lieu d'être
 mélangé aux autres.
+
+### Web
+
+`--web` sert la même interface dans un navigateur via
+[textual-serve](https://github.com/Textualize/textual-serve), une dépendance
+optionnelle, installez donc `sgrud[web]`. Elle écoute sur
+`http://127.0.0.1:8000` sauf indication contraire par `--host` et `--port`.
+Chaque onglet du navigateur reçoit sa propre copie de l'interface attachée à la
+même cible. Il n'y a aucune authentification, gardez-la donc sur localhost ou
+derrière quelque chose qui en fournit une.
+Sous Linux avec `run -- CMD`, la cible est
+lancée de façon à ce que tout processus du même utilisateur puisse la lire,
+car les sessions du navigateur ne sont pas son parent.
 
 ## Bibliothèque
 

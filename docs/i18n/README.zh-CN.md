@@ -20,6 +20,7 @@ sgrud 自身相同的 major.minor 版本。Linux 上信息最完整，其它平�
 ```
 sgrud PID                           交互式终端界面
 sgrud run -- python app.py          以子进程方式启动目标并观察它
+sgrud PID --web                     同一界面，改为在浏览器中打开
 
 sgrud dump PID                      输出一次文本快照
 sgrud dump PID -n 0.5               每 0.5 秒打印一次，直到目标退出
@@ -63,6 +64,16 @@ sgrud profile PID --folded          输出折叠栈，供 flamegraph.pl 或 spee
 （`--rate`，默认 100 Hz），在你查看其他标签页时它也会持续运行。火焰图自底向上生长，
 第一行为每个线程分配一个独立的块，因此空闲线程会显示为一根高高的柱子，
 而不是混在其他线程里。
+
+### Web
+
+`--web` 通过 [textual-serve](https://github.com/Textualize/textual-serve)
+把同一个界面提供给浏览器。它是可选依赖，安装 `sgrud[web]` 即可获得。默认监听
+`http://127.0.0.1:8000`，可用 `--host` 和 `--port` 修改。每个浏览器标签页
+都会得到一份独立的界面，连接到同一个目标进程。没有任何鉴权，请只在本机使用，
+或者放在有鉴权的反向代理后面。
+在 Linux 上使用 `run -- CMD` 时，目标会以允许同一用户的任意进程读取的方式启动，
+因为浏览器会话并不是它的父进程。
 
 ## 作为库使用
 
