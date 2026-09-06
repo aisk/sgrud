@@ -21,7 +21,6 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import (
     DataTable,
     Footer,
-    Header,
     Label,
     Select,
     Sparkline,
@@ -75,7 +74,7 @@ class Summary(Static):
     ) -> None:
         p = snap.process
         m = p.memory
-        text = Text()
+        text = Text(no_wrap=True, overflow="ellipsis")
         text.append(f" pid {p.pid} ", "bold")
         text.append(os.path.basename(p.exe) or "?")
         text.append(f"  up {human_duration(p.uptime)}")
@@ -96,6 +95,8 @@ class Summary(Static):
             if section == "attach":
                 continue  # shown in the banner
             text.append(f"  !{section}: {err.splitlines()[0]}", "red")
+        # Last so it is what gets cut off on a narrow terminal.
+        text.append("  " + " ".join(p.cmdline), "dim")
         self.update(text)
 
 
@@ -151,7 +152,7 @@ class SgrudApp(App[int]):
         Binding("r", "refresh_now", "Refresh"),
         Binding("+", "faster", "Faster"),
         Binding("-", "slower", "Slower"),
-        Binding("1", "tab('threads')", "Threads", show=False),
+        Binding("1", "tab('threads')", "Tabs", key_display="1-5"),
         Binding("2", "tab('tasks')", "Tasks", show=False),
         Binding("3", "tab('gc')", "GC", show=False),
         Binding("4", "tab('process')", "Process", show=False),
@@ -200,7 +201,6 @@ class SgrudApp(App[int]):
     # -- layout --------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
         yield Summary(id="summary")
         banner = Static("", id="banner")
         banner.display = self.monitor.limited is not None
@@ -284,6 +284,18 @@ class SgrudApp(App[int]):
     def action_tab(self, tab: str) -> None:
         self.query_one("#tabs", TabbedContent).active = tab
 
+    HOTSPOT_ACTIONS = frozenset({"toggle_sort", "clear_hotspots", "toggle_mode"})
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        # Hotspot keys only make sense (and only show in the footer) on that tab.
+        if action in self.HOTSPOT_ACTIONS:
+            return self.query_one("#tabs", TabbedContent).active == "hotspots"
+        return True
+
+    @on(TabbedContent.TabActivated)
+    def _tab_changed(self) -> None:
+        self.refresh_bindings()
+
     def action_toggle_sort(self) -> None:
         self.hot_sort = "total" if self.hot_sort == "self" else "self"
         if self.snapshot:
@@ -335,7 +347,6 @@ class SgrudApp(App[int]):
         if self._timer is not None:
             self._timer.stop()
             self._timer = None
-        self.sub_title = str(exc)
         if self.sampler is not None:
             self.sampler.stop()
         self.notify(str(exc), severity="warning", timeout=10)
@@ -349,7 +360,6 @@ class SgrudApp(App[int]):
         self.rss_history.append(snap.process.memory.rss)
         if snap.process.cpu_percent is not None:
             self.cpu_history.append(snap.process.cpu_percent)
-        self.sub_title = " ".join(snap.process.cmdline)[:60]
         self._update_summary()
         self._update_threads(snap)
         self._update_tasks(snap)
