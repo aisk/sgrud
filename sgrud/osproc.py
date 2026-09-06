@@ -190,8 +190,11 @@ def looks_like_python(pid: int) -> bool:
     name = os.path.basename(_optional(proc.exe, "")).lower()
     if name.startswith("python"):
         return True
+    memory_maps = getattr(proc, "memory_maps", None)  # psutil has none on macOS
+    if memory_maps is None:
+        return False
     try:
-        for mapping in proc.memory_maps():
+        for mapping in memory_maps():
             base = os.path.basename(mapping.path).lower()
             if "python" in base and any(ext in base for ext in (".so", ".dll", ".dylib")):
                 return True

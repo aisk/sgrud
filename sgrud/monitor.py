@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from . import osproc
 from .errors import AttachError, ProcessExited
 from .models import Process, Snapshot, Task, Thread, ThreadStatus
-from .remote import RemoteInspector, access_hint, is_python_process
+from .remote import RemoteInspector, access_hint, interpreter_pid
 
 
 @dataclass(slots=True)
@@ -69,6 +69,9 @@ class Monitor:
         monitor comes back in limited mode, see :attr:`limited`, unless
         ``require_full`` is set. Transient failures (the interpreter is
         still starting) are retried for up to ``retry`` seconds.
+
+        When ``pid`` is a launcher whose only child is the interpreter (a
+        Windows venv's ``python.exe``) the child is attached instead.
         """
         osproc.ensure_supported()
         if not osproc.pid_exists(pid):
@@ -82,7 +85,8 @@ class Monitor:
             monitor = cls(pid, **options)
             monitor.limited = hint
             return monitor
-        if not is_python_process(pid):
+        target = interpreter_pid(pid)
+        if target is None:
             try:
                 exe = osproc.exe(pid)
             except ProcessLookupError:
@@ -92,7 +96,7 @@ class Monitor:
                 f"{exe or 'process'} does not look like a CPython interpreter",
                 "sgrud can only inspect CPython processes of the same version as itself.",
             )
-        monitor = cls(pid, **options)
+        monitor = cls(target, **options)
         deadline = time.monotonic() + retry
         while True:
             try:
@@ -114,7 +118,9 @@ class Monitor:
         """Start ``argv`` as a child process and attach to it.
 
         ``settle`` is how long to wait for the interpreter to initialise
-        before the first attach attempt.
+        before the first attach attempt. If the child turns out to be a
+        launcher (a Windows venv's ``python.exe``) its interpreter child
+        is attached instead, while the launcher stays :attr:`child`.
         """
         child = subprocess.Popen(list(argv))
         deadline = time.monotonic() + max(settle, 0.05) + 5.0
@@ -124,7 +130,10 @@ class Monitor:
             if child.poll() is not None:
                 raise ProcessExited(child.pid, child.returncode)
             try:
-                monitor = cls(child.pid, child=child, **options)
+                target = interpreter_pid(child.pid)
+                if target is None:
+                    raise AttachError(child.pid, "no interpreter started yet", transient=True)
+                monitor = cls(target, child=child, **options)
                 monitor._get_inspector()
                 return monitor
             except AttachError as e:

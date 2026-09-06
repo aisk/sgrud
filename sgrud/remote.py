@@ -93,6 +93,19 @@ def child_pids(pid: int, recursive: bool = True) -> list[int]:
         return []
 
 
+def interpreter_pid(pid: int) -> int | None:
+    """``pid`` if it is a CPython process, else its only CPython child.
+
+    A Windows venv's ``python.exe`` is a launcher that runs the real
+    interpreter as a child process, and wrapper scripts do the same
+    elsewhere. Returns None when neither is an interpreter.
+    """
+    if is_python_process(pid):
+        return pid
+    pythons = [c for c in child_pids(pid, recursive=False) if is_python_process(c)]
+    return pythons[0] if len(pythons) == 1 else None
+
+
 def _frame(f: Any) -> Frame:
     loc = f.location
     if loc is None:

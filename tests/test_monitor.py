@@ -9,9 +9,9 @@ from sgrud import AttachError, Monitor, ProcessExited, ThreadStatus
 from sgrud.format import format_snapshot
 
 
-def test_process_section(snapshot, target):
+def test_process_section(snapshot, monitor):
     p = snapshot.process
-    assert p.pid == target.pid
+    assert p.pid == monitor.pid
     assert p.memory.rss > 1024 * 1024
     assert p.memory.vms >= p.memory.rss
     assert p.num_threads >= 3
@@ -26,8 +26,8 @@ def test_threads_have_names_status_and_stacks(snapshot, monitor):
     assert {"busy_loop", "idle_loop"} <= set(by_frame)
     main = [t for t in snapshot.threads if t.is_main]
     assert len(main) == 1
-    if sys.platform != "darwin":
-        assert main[0].tid == snapshot.process.pid
+    if sys.platform.startswith("linux"):
+        assert main[0].tid == snapshot.process.pid  # only Linux numbers threads like pids
 
     busy = by_frame["busy_loop"]
     assert busy.frames[0].filename.endswith("target_app.py")
@@ -65,10 +65,11 @@ def test_asyncio_tasks_tree(snapshot):
     assert len(leaves) >= 6
     children = snapshot.task_children()
     branch0 = next(t for t in snapshot.tasks if t.name == "branch-0")
+    main_tid = next(t.tid for t in snapshot.threads if t.is_main)
     assert len(children[branch0.id]) == 2
     for leaf in children[branch0.id]:
         assert leaf.parent_ids == (branch0.id,)
-        assert leaf.thread_id == snapshot.process.pid
+        assert leaf.thread_id == main_tid
     assert any(t.name == "Task-1" for t in children[None])
 
 
@@ -139,7 +140,7 @@ def test_spawn_child():
     with Monitor.spawn([sys.executable, str(TARGET)]) as m:
         assert m.child is not None
         snap = m.snapshot()
-        assert snap.process.pid == m.child.pid
+        assert snap.process.pid == m.pid
         assert snap.threads
     assert m.child.poll() is not None
 

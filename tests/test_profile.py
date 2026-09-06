@@ -58,7 +58,7 @@ def test_sampler_finds_busy_loop(monitor):
     assert hot.samples > 50, hot.samples
     assert sampler.exited is None
     snap = monitor.snapshot(tasks=False, gc=False)
-    busy_tid = next(t.tid for t in snap.threads if t.name == "busy")
+    busy_tid = next(t.tid for t in snap.threads if t.frames[0].funcname == "busy_loop")
     top = hot.rows(thread=busy_tid)[0]
     assert top.funcname == "busy_loop"
     assert top.self_percent > 50
