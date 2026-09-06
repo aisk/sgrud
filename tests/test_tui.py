@@ -2,7 +2,7 @@ import asyncio
 from typing import cast
 
 import pytest
-from textual.widgets import DataTable, Select, TabbedContent, Tabs, Tree
+from textual.widgets import DataTable, Select, Static, TabbedContent, Tabs, Tree
 
 from sgrud import Monitor
 from sgrud.tui import SgrudApp, StackPanel, Summary
@@ -191,16 +191,18 @@ async def test_tui_flame_tab(monitor):
 
         # Walk up from the root into the widest thread, then zoom in on it.
         await pilot.press("up")
-        assert len(graph.cursor) == 1 and graph.cursor_node.tid is not None
+        assert len(graph.cursor) == 1
+        assert graph.cursor_node is not None and graph.cursor_node.tid is not None
         await pilot.press("enter")
         assert graph.zoom == graph.cursor
         assert graph.cells()[0].node.tid is not None
         await pilot.press("backspace")
         assert graph.zoom == ()
-        status = str(app.query_one("#flame-status").content)
+        status = str(app.query_one("#flame-status", Static).content)
         assert "total" in status
 
         # The thread filter is shared with the Hotspots tab.
+        assert app.snapshot is not None
         busy = next(t.tid for t in app.snapshot.threads if t.name == "busy")
         app.query_one("#flame-filter", Select).value = busy
         await pilot.pause()

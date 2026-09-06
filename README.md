@@ -1,5 +1,7 @@
 # sgrud
 
+[![CI](https://github.com/aisk/sgrud/actions/workflows/ci.yml/badge.svg)](https://github.com/aisk/sgrud/actions/workflows/ci.yml)
+
 **English** | [简体中文](docs/i18n/README.zh-CN.md) | [日本語](docs/i18n/README.ja.md) | [한국어](docs/i18n/README.ko.md) | [Tiếng Việt](docs/i18n/README.vi.md) | [Français](docs/i18n/README.fr.md) | [Deutsch](docs/i18n/README.de.md)
 
 sgrud (from Scottish Gaelic *sgrùd*, meaning "inspection" or "examination")
