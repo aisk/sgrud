@@ -57,6 +57,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="hotspot ordering for --profile")
     dump.add_argument("--mode", choices=("wall", "gil"), default="wall",
                       help="count every thread (wall) or only the GIL holder (gil)")
+    dump.add_argument("--folded", action="store_true",
+                      help="with --profile, print collapsed stacks for flamegraph.pl or speedscope")
 
     tui = sub.add_parser("tui", help="interactive terminal interface")
     _add_target(tui)
@@ -143,7 +145,14 @@ def _profile(monitor: Monitor, args: argparse.Namespace) -> int:
         while time.monotonic() < deadline and sampler.exited is None:
             time.sleep(0.05)
     hot = sampler.hotspots
-    if args.json:
+    if args.folded:
+        try:
+            names = {t.tid: t.name for t in monitor.snapshot(tasks=False, gc=False).threads}
+        except SgrudError:
+            names = {}
+        for line in hot.folded(names=names):
+            print(line)
+    elif args.json:
         rows = [dataclasses.asdict(r) for r in hot.rows(sort=args.sort)]
         print(json.dumps({"samples": hot.samples, "rate": hot.rate(), "mode": hot.mode,
                           "errors": sampler.errors, "rows": rows}))

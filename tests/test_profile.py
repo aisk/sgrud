@@ -100,3 +100,41 @@ def test_sampler_gil_mode_ignores_sleepers(monitor):
     assert "busy_loop" in rows
     assert "idle_loop" not in rows
     assert rows["busy_loop"].self_percent > 80
+
+
+def test_call_tree_groups_threads_and_keeps_recursion():
+    hot = Hotspots()
+    hot.add_frames({1: (_f("inner"), _f("outer"), _f("main")), 2: (_f("work"),)})
+    hot.add_frames({1: (_f("outer"), _f("main"))})
+    hot.add_frames({1: (_f("rec"), _f("rec"), _f("main"))})
+
+    root = hot.call_tree(names={1: "main", 2: "worker"})
+    assert root.total == 4
+    assert [c.name for c in root.children.values()] == ["main [1]", "worker [2]"]
+    t1 = root.children[1]
+    assert t1.tid == 1 and t1.total == 3
+    main = t1.children[("main", "a.py")]
+    assert main.total == 3 and main.self_samples == 0
+    outer = main.children[("outer", "a.py")]
+    assert outer.total == 2 and outer.self_samples == 1
+    assert outer.children[("inner", "a.py")].self_samples == 1
+    rec = main.children[("rec", "a.py")]
+    # Recursion stays nested in the tree, unlike the per-function totals.
+    assert rec.total == 1 and rec.children[("rec", "a.py")].self_samples == 1
+    assert sum(1 for _ in root.walk()) == 9
+
+    only = hot.call_tree(thread=2)
+    assert only.tid == 2 and only.total == 1
+    assert list(only.children) == [("work", "a.py")]
+    assert hot.call_tree(thread=99).total == 0
+
+
+def test_folded_output():
+    hot = Hotspots()
+    hot.add_frames({1: (_f("inner"), _f("outer")), 2: (_f("<native>", "~"),)})
+    hot.add_frames({1: (_f("inner"), _f("outer"))})
+    assert hot.folded(names={1: "main"}) == [
+        "main [1];outer (a.py);inner (a.py) 2",
+        "thread 2;<native> 1",
+    ]
+    assert hot.folded(thread=1) == ["outer (a.py);inner (a.py) 2"]

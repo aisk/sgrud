@@ -2,7 +2,7 @@ import asyncio
 from typing import cast
 
 import pytest
-from textual.widgets import DataTable, Tree
+from textual.widgets import DataTable, Select, Tree
 
 from sgrud import Monitor
 from sgrud.tui import SgrudApp, StackPanel, Summary
@@ -133,3 +133,49 @@ async def test_tui_hotspots_tab(monitor):
         assert app.hotspots.samples < before / 2
         await pilot.press("q")
     assert not app.sampler.running
+
+
+async def test_tui_flame_tab(monitor):
+    from sgrud.tui import FlameGraph
+
+    app = SgrudApp(monitor, interval=0.2, sample_rate=200)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await asyncio.sleep(0.8)
+        await pilot.pause()
+        await pilot.press("6")
+        await pilot.pause()
+        graph = app.query_one(FlameGraph)
+        assert graph.has_focus
+        assert graph.root is not None and graph.root.total > 20
+        cells = graph.cells()
+        names = {c.node.name for c in cells}
+        assert "busy_loop" in names
+        threads = [c for c in cells if c.node.tid is not None]
+        assert any(c.node.name.startswith("busy [") for c in threads)
+        assert all(c.width >= 1 for c in cells)
+
+        # Walk up from the root into the widest thread, then zoom in on it.
+        await pilot.press("up")
+        assert len(graph.cursor) == 1 and graph.cursor_node.tid is not None
+        await pilot.press("enter")
+        assert graph.zoom == graph.cursor
+        assert graph.cells()[0].node.tid is not None
+        await pilot.press("backspace")
+        assert graph.zoom == ()
+        status = str(app.query_one("#flame-status").content)
+        assert "total" in status
+
+        # The thread filter is shared with the Hotspots tab.
+        busy = next(t.tid for t in app.snapshot.threads if t.name == "busy")
+        app.query_one("#flame-filter", Select).value = busy
+        await pilot.pause()
+        assert app.hot_thread == busy
+        assert app.query_one("#hot-filter", Select).value == busy
+        assert graph.root.tid == busy
+        assert all(c.node.tid is None or c.depth == 0 for c in graph.cells())
+
+        before = app.hotspots.samples
+        await pilot.press("c")
+        await pilot.pause()
+        assert app.hotspots.samples < before / 2
+        await pilot.press("q")

@@ -29,13 +29,22 @@ sgrud tui run -- python app.py
 ```
 sgrud PID --profile 5            sample stacks for 5 s, print the hottest functions
 sgrud PID --profile 5 --mode gil count only the thread holding the GIL
+sgrud PID --profile 5 --folded   collapsed stacks for flamegraph.pl or speedscope
 ```
 
-Keys inside the TUI: `1`-`5` switch tabs, `space` pauses, `r` refreshes,
-`+` and `-` change the refresh interval, `q` quits. On the Hotspots tab
-`s` toggles self/total ordering, `m` toggles wall/gil mode and `c` clears
-the samples. The tab is fed by a background sampler (`--rate`, default
-100 Hz) that keeps running while you look at the other tabs.
+Keys inside the TUI: `1`-`6` switch tabs, `space` pauses, `r` refreshes,
+`+` and `-` change the refresh interval, `q` quits. On the Hotspots and
+Flame tabs `m` toggles wall/gil mode and `c` clears the samples, and on
+Hotspots `s` toggles self/total ordering. Both tabs are fed by one
+background sampler (`--rate`, default 100 Hz) that keeps running while
+you look at the other tabs, and share the thread filter.
+
+The Flame tab draws the sampled stacks as a flame graph with the root at
+the bottom. With all threads selected each thread is a block of its own
+on the first row, so a sleeping thread shows up as a tall idle column
+rather than being mixed into the others. Arrow keys move a cursor between
+frames, `enter` zooms into the frame under the cursor, `backspace` zooms
+out one level and `esc` resets the zoom.
 
 In wall mode every thread with a Python stack counts, so a sleeping thread
 weighs as much as a busy one. In gil mode only the GIL holder counts, which
@@ -74,6 +83,8 @@ with Sampler(monitor, rate=500, mode="gil") as sampler:
     time.sleep(5)
 for row in sampler.hotspots.rows(sort="self", limit=10):
     print(row.self_percent, row.funcname, row.filename)
+tree = sampler.hotspots.call_tree()        # merged call tree, one child per thread
+print("\n".join(sampler.hotspots.folded()))  # flamegraph.pl input
 ```
 
 ## Permissions

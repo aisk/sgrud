@@ -11,12 +11,14 @@ from __future__ import annotations
 import threading
 import time
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Hashable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 
+from .format import short_path
 from .models import Frame, Thread, ThreadStatus
 
 FunctionKey = tuple[str, str]  # (funcname, filename)
+StackKey = tuple[FunctionKey, ...]  # outermost function first
 
 #: ``wall`` counts every thread that has a Python stack. ``gil`` counts only
 #: the thread holding the GIL, which is where CPU time goes in CPython.
@@ -40,10 +42,56 @@ class HotspotRow:
 
 
 @dataclass(slots=True)
+class CallNode:
+    """One node of the merged call tree built by :meth:`Hotspots.call_tree`.
+
+    Frame nodes are keyed by ``(funcname, filename)``. When the tree spans
+    several threads the root's children are thread nodes keyed by tid.
+    """
+
+    name: str
+    filename: str
+    key: Hashable
+    tid: int | None = None
+    #: Samples in which this node was on the stack.
+    total: int = 0
+    #: Samples in which this node was the innermost frame.
+    self_samples: int = 0
+    children: dict[Hashable, CallNode] = field(default_factory=dict)
+
+    @property
+    def synthetic(self) -> bool:
+        return self.tid is None and (self.filename == "~" or self.name.startswith("<"))
+
+    def child(self, key: Hashable, name: str, filename: str, tid: int | None = None) -> CallNode:
+        node = self.children.get(key)
+        if node is None:
+            node = self.children[key] = CallNode(name, filename, key, tid)
+        return node
+
+    def add_stack(self, stack: StackKey, count: int) -> None:
+        """Merge one outermost-first stack seen ``count`` times under this node."""
+        self.total += count
+        node = self
+        for key in stack:
+            node = node.child(key, key[0], key[1])
+            node.total += count
+        node.self_samples += count
+
+    def walk(self, depth: int = 0) -> Iterator[tuple[CallNode, int]]:
+        yield self, depth
+        for child in self.children.values():
+            yield from child.walk(depth + 1)
+
+
+@dataclass(slots=True)
 class _ThreadCounts:
     samples: int = 0
     self_counts: Counter[FunctionKey] = field(default_factory=Counter)
     total_counts: Counter[FunctionKey] = field(default_factory=Counter)
+    #: Whole stacks, outermost function first. This is what a flame graph
+    #: needs and, unlike the per-function counters, it keeps recursion as is.
+    stacks: Counter[StackKey] = field(default_factory=Counter)
 
 
 class Hotspots:
@@ -94,6 +142,7 @@ class Hotspots:
                 counts.samples += 1
                 leaf = frames[0]
                 counts.self_counts[(leaf.funcname, leaf.filename)] += 1
+                counts.stacks[tuple((f.funcname, f.filename) for f in reversed(frames))] += 1
                 # Count each function once per sample so recursion does not
                 # inflate its total beyond 100 percent.
                 seen: set[FunctionKey] = set()
@@ -161,3 +210,61 @@ class Hotspots:
         else:
             rows.sort(key=lambda r: (-r.self_samples, -r.total_samples, r.funcname))
         return rows[:limit] if limit is not None else rows
+
+    def _stacks(self, thread: int | None) -> list[tuple[int, dict[StackKey, int]]]:
+        with self._lock:
+            if thread is None:
+                return [(tid, dict(c.stacks)) for tid, c in sorted(self._threads.items())]
+            counts = self._threads.get(thread)
+            return [(thread, dict(counts.stacks))] if counts else []
+
+    def call_tree(
+        self, *, thread: int | None = None, names: Mapping[int, str] | None = None
+    ) -> CallNode:
+        """Merge the sampled stacks into one tree, outermost functions first.
+
+        With ``thread`` set the root's children are that thread's outermost
+        functions. Otherwise the root has one child per thread, labelled
+        from ``names`` when given, so threads sit side by side in a flame
+        graph instead of having their stacks mixed together.
+        """
+        if thread is None:
+            root = CallNode("all threads", "", None)
+            for tid, stacks in self._stacks(None):
+                node = root.child(tid, _thread_label(tid, names), "", tid)
+                for stack, count in stacks.items():
+                    node.add_stack(stack, count)
+                root.total += node.total
+            return root
+        root = CallNode(_thread_label(thread, names), "", None, thread)
+        for _, stacks in self._stacks(thread):
+            for stack, count in stacks.items():
+                root.add_stack(stack, count)
+        return root
+
+    def folded(
+        self, *, thread: int | None = None, names: Mapping[int, str] | None = None
+    ) -> list[str]:
+        """Collapsed stacks in the ``a;b;c count`` format of flamegraph.pl.
+
+        Without a ``thread`` filter each line starts with the thread label,
+        so the resulting graph shows threads side by side like the TUI.
+        """
+        lines = []
+        for tid, stacks in self._stacks(thread):
+            prefix = [] if thread is not None else [_thread_label(tid, names)]
+            for stack, count in sorted(stacks.items()):
+                parts = prefix + [_folded_frame(name, filename) for name, filename in stack]
+                lines.append(f"{';'.join(parts)} {count}")
+        return lines
+
+
+def _thread_label(tid: int, names: Mapping[int, str] | None) -> str:
+    name = names.get(tid) if names else None
+    return f"{name} [{tid}]" if name else f"thread {tid}"
+
+
+def _folded_frame(name: str, filename: str) -> str:
+    if filename == "~" or name.startswith("<"):
+        return name
+    return f"{name} ({short_path(filename)})".replace(";", ",")
