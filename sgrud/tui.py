@@ -11,6 +11,8 @@ from __future__ import annotations
 import os
 from collections import deque
 
+from rich.console import Group
+from rich.table import Table
 from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
@@ -29,7 +31,7 @@ from textual.widgets import (
 )
 
 from .errors import ProcessExited, SgrudError
-from .format import format_frames, human_bytes, human_duration, percent, short_path
+from .format import human_bytes, human_duration, percent, short_path
 from .models import Snapshot, Task, Thread, ThreadStatus
 from .monitor import Monitor
 
@@ -61,7 +63,13 @@ def _top_frame(frames) -> str:
 class Summary(Static):
     """One line process summary shown above the tabs."""
 
-    def update_from(self, snap: Snapshot, interval: float, paused: bool) -> None:
+    def update_from(
+        self,
+        snap: Snapshot,
+        interval: float,
+        paused: bool,
+        exited: ProcessExited | None = None,
+    ) -> None:
         p = snap.process
         m = p.memory
         text = Text()
@@ -76,7 +84,10 @@ class Summary(Static):
         if snap.gc:
             text.append(f"  gc0 {snap.gc[0].collections}")
         text.append(f"  every {interval:g}s")
-        if paused:
+        if exited is not None:
+            code = "" if exited.returncode is None else f" code {exited.returncode}"
+            text.append(f"  EXITED{code}", "bold white on red")
+        elif paused:
             text.append("  PAUSED", "bold yellow")
         for section, err in snap.errors.items():
             text.append(f"  !{section}: {err.splitlines()[0]}", "red")
@@ -84,17 +95,32 @@ class Summary(Static):
 
 
 class StackPanel(Static):
-    """Shows the frames of whatever is selected in the current tab."""
+    """Shows the frames of whatever is selected in the current tab.
+
+    ``stale`` marks frames that belong to a thread or task which is no
+    longer present in the latest snapshot.
+    """
 
     last_title: str = ""
     last_frames: tuple = ()
+    stale: bool = False
 
-    def show(self, title: str, frames) -> None:
+    def show(self, title: str, frames, *, stale: bool = False) -> None:
         self.last_title = title
         self.last_frames = tuple(frames)
-        lines = format_frames(frames, indent="  ")
-        body = "\n".join(lines) if lines else "  (no Python frames)"
-        self.update(Text.assemble((title + "\n", "bold"), body))
+        self.stale = stale
+        header = Text(title, style="bold red" if stale else "bold")
+        if not self.last_frames:
+            self.update(Group(header, Text("  (no Python frames)", style="dim")))
+            return
+        table = Table.grid(padding=(0, 2))
+        table.add_column(no_wrap=True, overflow="ellipsis", min_width=24,
+                         style="dim" if stale else "")
+        table.add_column(no_wrap=True, overflow="ellipsis", style="dim")
+        for f in self.last_frames:
+            where = "" if f.synthetic else f"{short_path(f.filename)}:{f.lineno}"
+            table.add_row(f.funcname, where)
+        self.update(Group(header, table))
 
 
 class SgrudApp(App[int]):
@@ -136,12 +162,16 @@ class SgrudApp(App[int]):
         self.interval = interval
         self.sections = dict(stacks=stacks, tasks=tasks, gc=gc)
         self.paused = False
+        #: Set once the target has gone away. The last snapshot is kept.
+        self.exited: ProcessExited | None = None
         self.snapshot: Snapshot | None = None
         self.rss_history: deque[int] = deque(maxlen=HISTORY)
         self.cpu_history: deque[float] = deque(maxlen=HISTORY)
         self._timer = None
         self._selected_tid: int | None = None
         self._selected_task: int | None = None
+        self._last_thread: Thread | None = None
+        self._last_task: Task | None = None
 
     # -- layout --------------------------------------------------------
 
@@ -182,10 +212,17 @@ class SgrudApp(App[int]):
 
     # -- actions -------------------------------------------------------
 
-    def action_toggle_pause(self) -> None:
-        self.paused = not self.paused
+    def _update_summary(self) -> None:
         if self.snapshot:
-            self.query_one(Summary).update_from(self.snapshot, self.interval, self.paused)
+            self.query_one(Summary).update_from(
+                self.snapshot, self.interval, self.paused, self.exited
+            )
+
+    def action_toggle_pause(self) -> None:
+        if self.exited:
+            return
+        self.paused = not self.paused
+        self._update_summary()
 
     def action_refresh_now(self) -> None:
         self.refresh_snapshot(force=True)
@@ -204,25 +241,34 @@ class SgrudApp(App[int]):
         if self._timer is not None:
             self._timer.stop()
         self._timer = self.set_interval(self.interval, self.refresh_snapshot)
-        if self.snapshot:
-            self.query_one(Summary).update_from(self.snapshot, self.interval, self.paused)
+        self._update_summary()
 
     # -- data flow -----------------------------------------------------
 
     def refresh_snapshot(self, force: bool = False) -> None:
-        if self.paused and not force:
+        if self.exited or (self.paused and not force):
             return
         try:
             snap = self.monitor.snapshot(**self.sections)
         except ProcessExited as e:
-            self.notify(str(e), severity="warning", timeout=10)
-            self.paused = True
-            self.sub_title = str(e)
+            self.mark_exited(e)
             return
         except SgrudError as e:
             self.notify(str(e), severity="error", timeout=10)
             return
         self.apply_snapshot(snap)
+
+    def mark_exited(self, exc: ProcessExited) -> None:
+        """Freeze the UI on the last snapshot and announce the exit."""
+        self.exited = exc
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+        self.sub_title = str(exc)
+        self.notify(str(exc), severity="warning", timeout=10)
+        self._update_summary()
+        self._show_thread(None)
+        self._show_task(None)
 
     def apply_snapshot(self, snap: Snapshot) -> None:
         """Render a snapshot. Public so tests and replays can drive the UI."""
@@ -231,7 +277,7 @@ class SgrudApp(App[int]):
         if snap.process.cpu_percent is not None:
             self.cpu_history.append(snap.process.cpu_percent)
         self.sub_title = " ".join(snap.process.cmdline)[:60]
-        self.query_one(Summary).update_from(snap, self.interval, self.paused)
+        self._update_summary()
         self._update_threads(snap)
         self._update_tasks(snap)
         self._update_gc(snap)
@@ -254,7 +300,7 @@ class SgrudApp(App[int]):
             )
             if key in table.rows:
                 for col, value in zip(table.columns, cells, strict=True):
-                    table.update_cell(key, col, value)
+                    table.update_cell(key, col, value, update_width=True)
             else:
                 table.add_row(*cells, key=key)
         for key in [k for k in table.rows if k.value not in seen]:
@@ -265,10 +311,17 @@ class SgrudApp(App[int]):
 
     def _show_thread(self, t: Thread | None) -> None:
         panel = self.query_one("#thread-stack", StackPanel)
-        if t is None:
-            panel.show("no thread selected", ())
+        if t is not None:
+            self._last_thread = t
+            panel.show(f"[{t.tid}] {t.name}  {t.status.describe()}", t.frames)
             return
-        panel.show(f"[{t.tid}] {t.name}  {t.status.describe()}", t.frames)
+        last = self._last_thread
+        if last is None:
+            panel.show("no thread selected", ())
+        else:
+            reason = "process exited" if self.exited else "thread gone"
+            panel.show(f"[{last.tid}] {last.name}  ({reason}, last seen stack)",
+                       last.frames, stale=True)
 
     @on(DataTable.RowHighlighted, "#threads-table")
     def _thread_highlighted(self, event: DataTable.RowHighlighted) -> None:
@@ -310,10 +363,17 @@ class SgrudApp(App[int]):
 
     def _show_task(self, task: Task | None) -> None:
         panel = self.query_one("#task-stack", StackPanel)
-        if task is None:
-            panel.show("select a task", ())
+        if task is not None:
+            self._last_task = task
+            panel.show(f"{task.name} (0x{task.id:x})", task.frames)
             return
-        panel.show(f"{task.name} (0x{task.id:x})", task.frames)
+        last = self._last_task
+        if last is None:
+            panel.show("select a task", ())
+        else:
+            reason = "process exited" if self.exited else "task finished"
+            panel.show(f"{last.name} (0x{last.id:x})  ({reason}, last seen stack)",
+                       last.frames, stale=True)
 
     @on(Tree.NodeHighlighted, "#tasks-tree")
     def _task_highlighted(self, event: Tree.NodeHighlighted) -> None:

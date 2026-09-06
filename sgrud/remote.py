@@ -32,12 +32,43 @@ except ImportError as e:  # pragma: no cover
         "(needs CPython >= 3.15 with remote debugging enabled)"
     ) from e
 
-for _name in ("GCMonitor", "THREAD_STATUS_HAS_GIL", "is_python_process"):
-    if not hasattr(_rd, _name):  # pragma: no cover
-        raise NotSupported(
-            f"_remote_debugging lacks {_name}; sgrud needs the CPython 3.15 API "
-            f"(running {sys.version.split()[0]})"
-        )
+# _remote_debugging is a private module, so pin down the exact shape we
+# rely on and fail loudly if a newer CPython moves things around.
+_REQUIRED_ATTRS = ("RemoteUnwinder", "GCMonitor", "THREAD_STATUS_HAS_GIL", "is_python_process")
+_REQUIRED_FIELDS = {
+    "InterpreterInfo": ("interpreter_id", "threads"),
+    "ThreadInfo": ("thread_id", "status", "frame_info"),
+    "FrameInfo": ("filename", "location", "funcname"),
+    "LocationInfo": ("lineno", "end_lineno", "col_offset", "end_col_offset"),
+    "AwaitedInfo": ("thread_id", "awaited_by"),
+    "TaskInfo": ("task_id", "task_name", "coroutine_stack", "awaited_by"),
+    "CoroInfo": ("call_stack", "task_name"),
+    "GCStatsInfo": (
+        "gen", "iid", "ts_start", "ts_stop", "collections", "collected",
+        "uncollectable", "candidates", "heap_size", "duration",
+    ),
+}
+
+
+def _check_api() -> None:
+    running = sys.version.split()[0]
+    for name in _REQUIRED_ATTRS:
+        if not hasattr(_rd, name):
+            raise NotSupported(
+                f"_remote_debugging lacks {name}; sgrud needs the CPython 3.15 API "
+                f"(running {running})"
+            )
+    for type_name, fields in _REQUIRED_FIELDS.items():
+        have = getattr(getattr(_rd, type_name, None), "__match_args__", ())
+        missing = [f for f in fields if f not in have]
+        if missing:
+            raise NotSupported(
+                f"_remote_debugging.{type_name} lacks fields {missing} on Python {running}; "
+                "sgrud needs updating for this interpreter"
+            )
+
+
+_check_api()
 
 
 def is_python_process(pid: int) -> bool:
