@@ -1,11 +1,12 @@
 import json
+import subprocess
 import sys
 import time
 
 import pytest
 from conftest import HAS_THREAD_STATS, TARGET, spawn_sleeper, spawn_target
 
-from sgrud import AttachError, Monitor, ProcessExited, ThreadStatus
+from sgrud import AttachError, Monitor, ProcessExited, SgrudError, ThreadStatus
 from sgrud.format import format_snapshot
 
 
@@ -317,5 +318,41 @@ def test_children_are_listed_and_marked_python():
         # The children would outlive the target and keep its stdout pipe open.
         for child in psutil.Process(proc.pid).children(recursive=True):
             child.kill()
+        proc.kill()
+        proc.wait()
+
+
+def test_probe_runs_inside_the_target(monitor):
+    from sgrud.format import format_probe
+
+    result = monitor.probe(types=5)
+    assert result.gc_threshold[0] > 0 and len(result.gc_count) == 3
+    assert result.gc_enabled and result.gc_frozen == 0
+    assert result.allocated_blocks > 1000 and result.modules > 10
+    assert {"MainThread", "busy", "idle"} <= set(result.thread_names)
+    assert result.tracked > 1000 and len(result.types) == 5
+    assert result.types[0].count >= result.types[1].count
+    assert "dict" in {t.name for t in result.types}
+    assert not result.tracing and result.allocations == ()
+    assert 0 < result.elapsed < result.round_trip
+    text = format_probe(result)
+    assert "threshold" in text and "most common types" in text
+    json.dumps(result.to_dict())
+    plain = monitor.probe()
+    assert plain.tracked == -1 and plain.types == ()
+
+
+def test_probe_is_refused_when_remote_debugging_is_off():
+    proc = subprocess.Popen(
+        [sys.executable, "-X", "disable-remote-debug", str(TARGET)], stdout=subprocess.PIPE
+    )
+    try:
+        assert proc.stdout is not None and proc.stdout.readline().strip() == b"READY"
+        with Monitor.attach(proc.pid) as m:
+            # Reading memory still works, only code injection is refused.
+            assert m.snapshot(tasks=False, gc=False).threads
+            with pytest.raises(SgrudError, match="disable-remote-debug"):
+                m.probe()
+    finally:
         proc.kill()
         proc.wait()

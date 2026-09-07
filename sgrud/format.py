@@ -7,6 +7,7 @@ import os
 from collections.abc import Iterable, Mapping
 
 from .models import ChildProcess, Frame, Process, Snapshot, Task, Thread
+from .probe import ProbeResult
 
 
 def human_bytes(n: int) -> str:
@@ -280,4 +281,36 @@ def format_hotspots(
         )
     if not rows:
         lines.append("(no samples)")
+    return "\n".join(lines)
+
+
+def format_probe(r: ProbeResult) -> str:
+    """Render what :func:`sgrud.probe.probe` brought back."""
+    thr = "/".join(str(n) for n in r.gc_threshold)
+    cnt = "/".join(str(n) for n in r.gc_count)
+    lines = [
+        f"probe of pid {r.pid}: {human_duration(r.elapsed)} in the target, "
+        f"{human_duration(r.round_trip)} round trip",
+        f"gc        threshold {thr}   count {cnt}   {'enabled' if r.gc_enabled else 'DISABLED'}"
+        f"   frozen {human_count(r.gc_frozen)}   garbage {human_count(r.gc_garbage)}",
+        f"memory    allocated blocks {human_count(r.allocated_blocks)}   "
+        f"tracemalloc {'tracing' if r.tracing else 'off'}",
+        f"modules   {human_count(r.modules)}   switch interval {r.switch_interval * 1e3:g}ms   "
+        f"cwd {r.cwd}",
+        f"threads   {', '.join(r.thread_names)}",
+    ]
+    if r.tracked >= 0:
+        lines.append(f"tracked   {human_count(r.tracked)} objects, most common types:")
+        for t in r.types:
+            lines.append(f"    {human_count(t.count):>12}  {t.name}")
+    if r.tracing:
+        lines.append(
+            f"tracemalloc  {human_bytes(r.tracemalloc_traced)} traced, "
+            f"peak {human_bytes(r.tracemalloc_peak)}, biggest lines:"
+        )
+        for a in r.allocations:
+            lines.append(
+                f"    {human_bytes(a.size):>10}  {human_count(a.count):>8} blocks  "
+                f"{short_path(a.filename)}:{a.lineno}"
+            )
     return "\n".join(lines)

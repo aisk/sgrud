@@ -44,6 +44,9 @@ sgrud profile PID --folded          piles repliées pour flamegraph.pl ou speeds
 sgrud profile PID -o out.html       écrit un flame graph, ou .json / .pstats / .txt / .jsonl / un dossier
 sgrud profile PID -o out.bin        enregistre pour `python -m profiling.sampling replay`
 sgrud PID --record out.bin          l'interface, en enregistrant chaque échantillon pris
+
+sgrud probe PID                     exécute un script dans la cible : seuils du gc, allocateur, threads
+sgrud probe PID -t 10               compte aussi les objets suivis par type, les dix plus fréquents
 ```
 
 `--no-stacks`, `--no-tasks` et `--no-gc` retirent de l'interface ou du
@@ -95,6 +98,7 @@ enregistrement sous l'interface, à travers les changements de mode.
 | `q` | quitter |
 | `f` | filtre de threads (Hotspots et Flame) |
 | `m` | alterner entre les modes d'échantillonnage (Hotspots et Flame) |
+| `x` | sonder la cible (GC) |
 | `c` | effacer les échantillons (Hotspots et Flame) |
 | `s` | basculer le tri self/total (Hotspots) |
 | `enter` / `backspace` / `esc` | zoom avant / arrière / réinitialiser (Flame) |
@@ -145,6 +149,22 @@ Sous Linux avec `run -- CMD`, la cible est
 lancée de façon à ce que tout processus du même utilisateur puisse la lire,
 car les sessions du navigateur ne sont pas son parent.
 
+### Sonde
+
+Tout ce qui précède lit la mémoire de la cible de l'extérieur. `sgrud probe`
+est la seule exception : il utilise `sys.remote_exec` pour faire exécuter
+par le thread principal de la cible, à son prochain point sûr, un court
+script qui rapporte ce que l'interpréteur n'expose pas en mémoire. Ce sont
+les seuils du gc et les compteurs auxquels ils sont comparés, si le
+collecteur est activé, combien d'objets sont gelés ou dans `gc.garbage`, le
+nombre de blocs tenus par l'allocateur, le nombre de modules et de threads,
+avec `-t N` un histogramme des objets suivis par type, et un instantané
+tracemalloc si la cible a déjà le traçage activé. `x` sur l'onglet GC lance
+la même sonde. Elle coûte à la cible quelques millisecondes sur son thread
+principal, davantage avec l'histogramme des types, et elle attend que ce
+thread atteigne un point sûr, donc un thread principal bloqué dans du code C
+la fait expirer. sgrud ne la lance jamais de lui-même.
+
 ## Bibliothèque
 
 La TUI n'est qu'une interface. Tout provient de `Monitor`, qui renvoie de
@@ -164,6 +184,8 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
     print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.to_dict())  # JSON friendly
+    result = m.probe(types=5)  # runs code in the target, see Probing
+    print(result.gc_threshold, result.gc_count, result.types)
 ```
 
 `Monitor.stream(interval)` produit des instantanés jusqu'à la fin de la
@@ -232,8 +254,8 @@ autres exigent un administrateur.
 
 Passez `require_full=True` à `Monitor.attach` pour échouer au lieu de se
 dégrader. Une cible lancée avec `-X disable-remote-debug` reste inspectable,
-puisque ce drapeau ne désactive que l'injection de code, que sgrud
-n'utilise pas.
+puisque ce drapeau ne désactive que l'injection de code. La seule chose
+qu'il bloque est `sgrud probe`.
 
 ## Développement
 

@@ -8,6 +8,7 @@ sgrud dump PID -n 0.5         keep printing snapshots every 0.5 s
 sgrud dump PID --json         JSON lines instead of text
 sgrud profile PID -d 5        sample stacks for 5 s and print the hottest functions
 sgrud profile PID -o out.html sample and write a flame graph (or .bin, .json, .pstats, ...)
+sgrud probe PID               run a script inside the target for gc thresholds and type counts
 """
 
 from __future__ import annotations
@@ -46,7 +47,7 @@ def _add_sections(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-native", action="store_true", help="hide <native> marker frames")
 
 
-COMMANDS = ("top", "dump", "profile")
+COMMANDS = ("top", "dump", "profile", "probe")
 
 
 def _add_mode(parser: argparse.ArgumentParser, help: str) -> None:
@@ -65,7 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=__doc__.split("\n\n")[0],
         epilog="With no subcommand sgrud opens the interactive interface.",
     )
-    sub = parser.add_subparsers(dest="command", metavar="{dump,profile}")
+    sub = parser.add_subparsers(dest="command", metavar="{dump,profile,probe}")
 
     # The default command. No help text keeps it out of the listing, since
     # `sgrud PID` is the documented spelling.
@@ -147,6 +148,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="record the bytecode instruction of every frame (gecko, heatmap and binary use it)",
     )
     profile.add_argument("--no-native", action="store_true", help="hide <native> marker frames")
+
+    probe = sub.add_parser(
+        "probe",
+        help="run a script inside the target for what memory alone cannot show",
+        description="Have the target's main thread run a short script (sys.remote_exec) that "
+        "reports the GC thresholds and counters, the allocator's block count, module and "
+        "thread counts, optionally a histogram of tracked objects by type, and a tracemalloc "
+        "snapshot when the target is tracing. This is the one sgrud command that touches the "
+        "target, and it waits for the main thread to reach a safe point.",
+    )
+    _add_target(probe)
+    probe.add_argument(
+        "-t",
+        "--types",
+        type=int,
+        default=0,
+        metavar="N",
+        help="also count tracked objects by type and show the N most common "
+        "(walks every object the GC tracks)",
+    )
+    probe.add_argument(
+        "--allocations",
+        type=int,
+        default=10,
+        metavar="N",
+        help="tracemalloc lines to show when the target is tracing (default 10)",
+    )
+    probe.add_argument(
+        "--timeout", type=float, default=5.0, help="seconds to wait for the answer (default 5)"
+    )
+    probe.add_argument("--json", action="store_true", help="emit the result as JSON")
     return parser
 
 
@@ -315,6 +347,31 @@ def _print_hotspots(monitor: Monitor, sampler: Sampler, args: argparse.Namespace
     return 0
 
 
+def _probe(args: argparse.Namespace) -> int:
+    from .format import format_probe
+
+    try:
+        monitor = open_monitor(args.target, args.command_argv)
+        with monitor:
+            if monitor.limited is not None:
+                print(
+                    f"sgrud: probing needs access to the target's memory. {monitor.limited}",
+                    file=sys.stderr,
+                )
+                return 1
+            result = monitor.probe(
+                types=args.types, allocations=args.allocations, timeout=args.timeout
+            )
+    except SgrudError as e:
+        print(f"sgrud: {e}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result.to_dict()))
+    else:
+        print(format_probe(result))
+    return 0
+
+
 def _top(args: argparse.Namespace) -> int:
     from .tui import run_tui
 
@@ -366,6 +423,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _dump(args)
     if args.command == "profile":
         return _profile(args)
+    if args.command == "probe":
+        return _probe(args)
     build_parser().print_help()
     return 2
 

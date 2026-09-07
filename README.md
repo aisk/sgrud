@@ -43,6 +43,9 @@ sgrud profile PID --folded          collapsed stacks for flamegraph.pl or speeds
 sgrud profile PID -o out.html       write a flame graph, or .json / .pstats / .txt / .jsonl / a directory
 sgrud profile PID -o out.bin        record for `python -m profiling.sampling replay`
 sgrud PID --record out.bin          the interface, recording every sample it takes
+
+sgrud probe PID                     run a script inside the target: gc thresholds, allocator, threads
+sgrud probe PID -t 10               also count the tracked objects by type, ten most common
 ```
 
 `--no-stacks`, `--no-tasks` and `--no-gc` drop sections you do not need
@@ -88,6 +91,7 @@ does the same recording under the interface, across mode switches.
 | `q` | quit |
 | `f` | thread filter (Hotspots and Flame) |
 | `m` | cycle the sampling mode (Hotspots and Flame) |
+| `x` | probe the target (GC) |
 | `c` | clear samples (Hotspots and Flame) |
 | `s` | toggle self/total ordering (Hotspots) |
 | `enter` / `backspace` / `esc` | zoom in / out / reset (Flame) |
@@ -133,6 +137,21 @@ something that provides one. With `run -- CMD` on Linux the target is
 started allowing any process of the same user to read it, since the
 browser sessions are not its parent.
 
+### Probing
+
+Everything above reads the target's memory from outside. `sgrud probe`
+is the one exception: it uses `sys.remote_exec` to have the target's main
+thread run a short script at its next safe point, which reports what the
+interpreter does not export in memory. That is the GC thresholds and the
+counters they are compared to, whether the collector is enabled, how many
+objects are frozen or in `gc.garbage`, the allocator's block count, module
+and thread counts, with `-t N` a histogram of tracked objects by type, and
+a tracemalloc snapshot when the target already has tracing on. `x` on the
+GC tab runs the same probe. It costs the target a few milliseconds on its
+main thread, more with a type histogram, and it waits for that thread to
+reach a safe point, so a main thread stuck in C code makes it time out.
+sgrud never runs it on its own.
+
 ## Library
 
 The TUI is only a front end. Everything comes from `Monitor`, which
@@ -152,6 +171,8 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
     print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.to_dict())  # JSON friendly
+    result = m.probe(types=5)  # runs code in the target, see Probing
+    print(result.gc_threshold, result.gc_count, result.types)
 ```
 
 `Monitor.stream(interval)` yields snapshots until the target exits, then
@@ -215,7 +236,8 @@ Windows any process of the same user works, others need an administrator.
 
 Pass `require_full=True` to `Monitor.attach` to fail instead of degrading.
 A target started with `-X disable-remote-debug` can still be inspected,
-since that flag only disables code injection, which sgrud does not use.
+since that flag only disables code injection. The one thing it blocks is
+`sgrud probe`.
 
 ## Development
 

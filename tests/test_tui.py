@@ -42,6 +42,14 @@ async def test_tui_renders_snapshot(monitor):
         await pilot.press("tab")
         assert tabs.active == "gc"
         assert app.query_one("#gc-table", DataTable).has_focus
+        await pilot.press("x")
+        for _ in range(100):
+            await asyncio.sleep(0.05)
+            if app.probe_result is not None:
+                break
+        await pilot.pause()
+        assert app.probe_result is not None and app.probe_result.types
+        assert "threshold" in str(app.query_one("#probe-info", Static).render())
         await pilot.press("shift+tab")
         assert tabs.active == "tasks"
         # space belongs to the tree, p pauses.

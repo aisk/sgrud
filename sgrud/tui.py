@@ -51,6 +51,7 @@ from .format import (
 )
 from .models import GCCollection, Snapshot, Task, Thread, ThreadStatus
 from .monitor import Monitor
+from .probe import ProbeResult
 from .profile import MODES, CallNode, Hotspots
 from .sampler import Sampler
 
@@ -414,6 +415,7 @@ class SgrudApp(App[int]):
     Tree { height: 1fr; }
     #memhist, #cpuhist, #faulthist, #heaphist, #gchist { height: 3; }
     #gc-info { height: 2; padding: 0 1; }
+    #probe-info { height: auto; padding: 0 1; color: $text-muted; }
     #gc-table { height: auto; }
     #hot-bar, #flame-bar { height: 3; }
     #hot-filter, #flame-filter { width: 40; }
@@ -448,6 +450,7 @@ class SgrudApp(App[int]):
         Binding("s", "toggle_sort", "Sort self/total"),
         Binding("c", "clear_hotspots", "Clear samples"),
         Binding("m", "toggle_mode", "Mode"),
+        Binding("x", "probe", "Probe target"),
     ]
 
     #: The widget that gets focus when a tab becomes active.
@@ -502,6 +505,9 @@ class SgrudApp(App[int]):
         self._selected_task: int | None = None
         self._last_thread: Thread | None = None
         self._last_task: Task | None = None
+        self._probing = False
+        #: The last answer from the target, see :meth:`action_probe`.
+        self.probe_result: ProbeResult | None = None
 
     # -- layout --------------------------------------------------------
 
@@ -531,6 +537,14 @@ class SgrudApp(App[int]):
                     yield StackPanel("", id="task-stack", classes="stack")
             with TabPane("GC", id="gc"):
                 yield Static("", id="gc-info")
+                yield Static(
+                    Text(
+                        "x runs a probe inside the target: gc thresholds and counts, "
+                        "allocator blocks, object types",
+                        "dim",
+                    ),
+                    id="probe-info",
+                )
                 yield Label("tracked objects", classes="hist-label")
                 yield Sparkline([], id="heaphist")
                 yield Label("time in gc %", classes="hist-label")
@@ -651,6 +665,7 @@ class SgrudApp(App[int]):
         "toggle_sort": ("hotspots",),
         "clear_hotspots": ("hotspots", "flame"),
         "toggle_mode": ("hotspots", "flame"),
+        "probe": ("gc",),
     }
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
@@ -676,6 +691,56 @@ class SgrudApp(App[int]):
         # Samples are not comparable across modes, so start over.
         self.hotspots.mode = MODES[(MODES.index(self.hotspots.mode) + 1) % len(MODES)]
         self.action_clear_hotspots()
+
+    def action_probe(self) -> None:
+        """Run the probe in a thread and show the answer on the GC tab."""
+        if self.exited or self._probing:
+            return
+        if self.monitor.limited is not None:
+            self.notify("probing needs access to the target's memory", severity="error")
+            return
+        self._probing = True
+        self.query_one("#probe-info", Static).update(Text("probing...", "dim"))
+        self.run_worker(self._run_probe, thread=True, exclusive=True, group="probe")
+
+    def _run_probe(self) -> None:
+        try:
+            result = self.monitor.probe(types=8)
+        except SgrudError as e:
+            self.call_from_thread(self._show_probe, None, str(e))
+        else:
+            self.call_from_thread(self._show_probe, result, None)
+
+    def _show_probe(self, result: ProbeResult | None, error: str | None) -> None:
+        self._probing = False
+        self.probe_result = result
+        info = self.query_one("#probe-info", Static)
+        if result is None:
+            info.update(Text(f"probe failed: {error}", "red"))
+            return
+        text = Text()
+        thr = "/".join(str(n) for n in result.gc_threshold)
+        cnt = "/".join(str(n) for n in result.gc_count)
+        text.append("probe  ", "bold")
+        text.append(f"threshold {thr}  count {cnt}  ")
+        if result.gc_enabled:
+            text.append("enabled")
+        else:
+            text.append("DISABLED", "red")
+        text.append(
+            f"  frozen {human_count(result.gc_frozen)}  garbage {human_count(result.gc_garbage)}"
+            f"  blocks {human_count(result.allocated_blocks)}  modules {result.modules}"
+        )
+        if result.tracing:
+            text.append(f"  tracemalloc {human_bytes(result.tracemalloc_traced)}", "cyan")
+        text.append(f"  ({human_duration(result.elapsed)} in target)", "dim")
+        if result.types:
+            text.append("\ntypes  ", "bold")
+            text.append(
+                "  ".join(f"{t.name} {human_count(t.count)}" for t in result.types)
+                + f"  of {human_count(result.tracked)} tracked"
+            )
+        info.update(text)
 
     def action_clear_hotspots(self) -> None:
         self.hotspots.reset()

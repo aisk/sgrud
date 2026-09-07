@@ -40,6 +40,9 @@ sgrud profile PID --folded          flamegraph.pl이나 speedscope용 접힌 스
 sgrud profile PID -o out.html       플레임 그래프 저장 (.json / .pstats / .txt / .jsonl / 디렉터리도 가능)
 sgrud profile PID -o out.bin        `python -m profiling.sampling replay`용으로 기록
 sgrud PID --record out.bin          인터페이스를 열면서 모든 샘플을 기록
+
+sgrud probe PID                     대상 안에서 스크립트 실행: gc 임계값, 할당기, 스레드
+sgrud probe PID -t 10               추적 중인 객체를 타입별로 세어 가장 많은 열 가지 표시
 ```
 
 `--no-stacks`, `--no-tasks`, `--no-gc`를 사용하면 필요 없는 섹션을 인터페이스나
@@ -84,6 +87,7 @@ sgrud PID --record out.bin          인터페이스를 열면서 모든 샘플�
 | `q` | 종료 |
 | `f` | 스레드 필터 (Hotspots 및 Flame) |
 | `m` | 샘플링 모드 순환 (Hotspots 및 Flame) |
+| `x` | 대상 프로브 (GC) |
 | `c` | 샘플 지우기 (Hotspots 및 Flame) |
 | `s` | self/total 정렬 전환 (Hotspots) |
 | `enter` / `backspace` / `esc` | 확대 / 축소 / 초기화 (Flame) |
@@ -117,6 +121,19 @@ localhost에만 두거나 인증을 제공하는 무언가 뒤에 두세요.
 Linux에서 `run -- CMD`를 쓰면 브라우저 세션이 대상의 부모가 아니므로, 대상은
 같은 사용자의 어떤 프로세스든 읽을 수 있도록 시작됩니다.
 
+### 프로브
+
+위의 모든 기능은 바깥에서 대상의 메모리를 읽기만 합니다. `sgrud probe`는 유일한
+예외로, `sys.remote_exec`를 써서 대상의 메인 스레드가 다음 안전 지점에서 짧은
+스크립트를 실행하게 하고, 인터프리터가 메모리에 내놓지 않는 것을 보고받습니다.
+gc 임계값과 그것과 비교되는 카운터, 수집기 활성 여부, 동결되었거나
+`gc.garbage`에 있는 객체 수, 할당기가 쥔 블록 수, 모듈과 스레드 수, `-t N`을
+주면 추적 중인 객체의 타입별 히스토그램, 대상이 이미 tracemalloc을 켜 두었다면
+그 스냅샷까지 가져옵니다. GC 탭의 `x`도 같은 프로브를 실행합니다. 대상의 메인
+스레드에서 몇 밀리초를 쓰고 (타입 히스토그램이 있으면 더), 메인 스레드가 안전
+지점에 닿기를 기다리므로 C 코드에 갇힌 메인 스레드는 타임아웃을 냅니다. sgrud가
+스스로 실행하는 일은 없습니다.
+
 ## 라이브러리
 
 TUI는 프런트엔드일 뿐입니다. 모든 것은 `Monitor`에서 나오며, 단순한 frozen
@@ -136,6 +153,8 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
     print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.to_dict())  # JSON friendly
+    result = m.probe(types=5)  # runs code in the target, see Probing
+    print(result.gc_threshold, result.gc_count, result.types)
 ```
 
 `Monitor.stream(interval)`은 대상이 종료될 때까지 스냅샷을 생성한 뒤
@@ -190,7 +209,7 @@ Windows에서는 같은 사용자의 프로세스는 그대로 동작하고, 다
 
 `Monitor.attach`에 `require_full=True`를 넘기면 기능을 축소하는 대신 실패합니다.
 `-X disable-remote-debug`로 시작된 대상도 검사할 수 있습니다. 그 플래그는 코드
-주입만 비활성화하는데, sgrud는 코드 주입을 사용하지 않기 때문입니다.
+주입만 비활성화하기 때문입니다. 유일하게 막히는 것은 `sgrud probe`입니다.
 
 ## 개발
 

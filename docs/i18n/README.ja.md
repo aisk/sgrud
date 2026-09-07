@@ -41,6 +41,9 @@ sgrud profile PID --folded          flamegraph.pl や speedscope 向けの折り
 sgrud profile PID -o out.html       フレームグラフを書き出す (.json / .pstats / .txt / .jsonl / ディレクトリも可)
 sgrud profile PID -o out.bin        `python -m profiling.sampling replay` 用に記録
 sgrud PID --record out.bin          インターフェースを開きつつ全サンプルを記録
+
+sgrud probe PID                     対象内でスクリプトを実行: gc の閾値、アロケータ、スレッド
+sgrud probe PID -t 10               追跡中オブジェクトを型ごとに数え、上位 10 種を表示
 ```
 
 `--no-stacks`、`--no-tasks`、`--no-gc` を指定すると、不要なセクションを
@@ -87,6 +90,7 @@ Tachyon のバイナリ形式で、後から `python -m profiling.sampling repla
 | `q` | 終了 |
 | `f` | スレッドフィルタ (Hotspots と Flame) |
 | `m` | サンプリングモードの切り替え (Hotspots と Flame) |
+| `x` | 対象をプローブ (GC) |
 | `c` | サンプルのクリア (Hotspots と Flame) |
 | `s` | self/total の並び順の切り替え (Hotspots) |
 | `enter` / `backspace` / `esc` | ズームイン / ズームアウト / リセット (Flame) |
@@ -127,6 +131,20 @@ Python インタプリタであるものに印を付けるので、`multiprocess
 Linux で `run -- CMD` を使うと、ブラウザセッションは対象の親ではないため、
 対象は同じユーザーの任意のプロセスから読めるように起動されます。
 
+### プローブ
+
+ここまでの機能はすべて外側から対象のメモリを読むだけです。`sgrud probe` は
+唯一の例外で、`sys.remote_exec` を使って対象のメインスレッドに次の安全点で短い
+スクリプトを実行させ、インタプリタがメモリ上に公開していない情報を報告させます。
+gc の閾値とそれと比較されるカウンタ、コレクタが有効かどうか、凍結された
+オブジェクトや `gc.garbage` にあるオブジェクトの数、アロケータが保持する
+ブロック数、モジュール数とスレッド数、`-t N` を付ければ追跡中オブジェクトの
+型ごとのヒストグラム、対象が既に tracemalloc を有効にしていればそのスナップ
+ショットも含まれます。GC タブの `x` も同じプローブを実行します。対象の
+メインスレッドを数ミリ秒 (型ヒストグラム付きならもっと) 使い、メインスレッドが
+安全点に到達するのを待つため、C コードで止まっているとタイムアウトします。
+sgrud が勝手に実行することはありません。
+
 ## ライブラリ
 
 TUI はフロントエンドにすぎません。すべては `Monitor` から得られ、
@@ -146,6 +164,8 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
     print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.to_dict())  # JSON friendly
+    result = m.probe(types=5)  # runs code in the target, see Probing
+    print(result.gc_threshold, result.gc_count, result.types)
 ```
 
 `Monitor.stream(interval)` は対象が終了するまでスナップショットを yield し、
@@ -209,8 +229,8 @@ macOS では root だけが他のプロセスのメモリを読めるため、`s
 
 `Monitor.attach` に `require_full=True` を渡すと、機能を落とす代わりに
 失敗するようになります。`-X disable-remote-debug` で起動した対象も調べられます。
-このフラグはコードインジェクションを無効にするだけであり、sgrud はそれを
-使わないためです。
+このフラグはコードインジェクションを無効にするだけだからです。唯一止められるのは
+`sgrud probe` です。
 
 ## 開発
 

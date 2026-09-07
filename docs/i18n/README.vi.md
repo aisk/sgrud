@@ -41,6 +41,9 @@ sgrud profile PID --folded          stack dạng gộp cho flamegraph.pl hoặc 
 sgrud profile PID -o out.html       ghi flame graph, hoặc .json / .pstats / .txt / .jsonl / một thư mục
 sgrud profile PID -o out.bin        ghi lại cho `python -m profiling.sampling replay`
 sgrud PID --record out.bin          mở giao diện và ghi lại mọi mẫu nó lấy
+
+sgrud probe PID                     chạy một script bên trong mục tiêu: ngưỡng gc, bộ cấp phát, thread
+sgrud probe PID -t 10               đếm thêm các đối tượng được theo dõi theo kiểu, mười kiểu nhiều nhất
 ```
 
 `--no-stacks`, `--no-tasks` và `--no-gc` bỏ bớt những phần bạn không cần
@@ -88,6 +91,7 @@ dưới giao diện, xuyên suốt các lần đổi chế độ.
 | `q` | thoát |
 | `f` | lọc theo thread (Hotspots và Flame) |
 | `m` | luân chuyển chế độ lấy mẫu (Hotspots và Flame) |
+| `x` | thăm dò mục tiêu (GC) |
 | `c` | xóa các mẫu (Hotspots và Flame) |
 | `s` | đổi thứ tự sắp xếp self/total (Hotspots) |
 | `enter` / `backspace` / `esc` | phóng to / thu nhỏ / đặt lại (Flame) |
@@ -133,6 +137,20 @@ giữ nó ở localhost hoặc đặt sau thứ gì đó có xác thực.
 Trên Linux với `run -- CMD`, tiến trình đích được khởi chạy sao cho mọi tiến trình
 cùng người dùng đều đọc được nó, vì các phiên trình duyệt không phải cha của nó.
 
+### Thăm dò
+
+Mọi thứ ở trên đều đọc bộ nhớ của mục tiêu từ bên ngoài. `sgrud probe` là
+ngoại lệ duy nhất: nó dùng `sys.remote_exec` để thread chính của mục tiêu chạy
+một script ngắn ở điểm an toàn kế tiếp, báo lại những gì trình thông dịch
+không đưa ra trong bộ nhớ. Đó là các ngưỡng gc và bộ đếm được so với chúng,
+bộ thu gom có đang bật không, bao nhiêu đối tượng bị đóng băng hoặc nằm trong
+`gc.garbage`, số block bộ cấp phát đang giữ, số module và thread, với `-t N`
+là biểu đồ các đối tượng được theo dõi theo kiểu, và một ảnh chụp tracemalloc
+nếu mục tiêu đã bật theo dõi sẵn. Phím `x` ở tab GC chạy cùng thăm dò này. Nó
+tốn của thread chính mục tiêu vài mili giây, nhiều hơn khi có biểu đồ kiểu, và
+phải chờ thread đó tới điểm an toàn, nên thread chính kẹt trong mã C sẽ làm nó
+hết giờ. sgrud không bao giờ tự chạy nó.
+
 ## Thư viện
 
 TUI chỉ là lớp giao diện. Mọi thứ đều đến từ `Monitor`, vốn trả về các
@@ -152,6 +170,8 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
     print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.to_dict())  # JSON friendly
+    result = m.probe(types=5)  # runs code in the target, see Probing
+    print(result.gc_threshold, result.gc_count, result.types)
 ```
 
 `Monitor.stream(interval)` sinh ra các ảnh chụp liên tiếp cho đến khi tiến
@@ -216,8 +236,8 @@ người dùng khác cần quyền quản trị viên.
 
 Truyền `require_full=True` cho `Monitor.attach` để báo lỗi thay vì chạy ở
 chế độ hạn chế. Tiến trình đích khởi chạy với `-X disable-remote-debug` vẫn
-có thể được quan sát, vì cờ đó chỉ tắt việc chèn mã, điều mà sgrud không
-dùng đến.
+có thể được quan sát, vì cờ đó chỉ tắt việc chèn mã. Thứ duy nhất nó chặn
+là `sgrud probe`.
 
 ## Phát triển
 

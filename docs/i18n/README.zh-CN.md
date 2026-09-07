@@ -38,6 +38,9 @@ sgrud profile PID --folded          输出折叠栈，供 flamegraph.pl 或 spee
 sgrud profile PID -o out.html       写出火焰图，也可以是 .json / .pstats / .txt / .jsonl / 目录
 sgrud profile PID -o out.bin        录制成 `python -m profiling.sampling replay` 可读的格式
 sgrud PID --record out.bin          打开界面的同时录制每一个样本
+
+sgrud probe PID                     在目标里运行一段脚本：gc 阈值、分配器、线程
+sgrud probe PID -t 10               同时按类型统计被追踪的对象，列出最多的十种
 ```
 
 `--no-stacks`、`--no-tasks` 和 `--no-gc` 可以从界面或 dump 输出中去掉你不需要的部分。
@@ -77,6 +80,7 @@ sgrud PID --record out.bin          打开界面的同时录制每一个样本
 | `q` | 退出 |
 | `f` | 线程过滤（Hotspots 和 Flame） |
 | `m` | 循环切换采样模式（Hotspots 和 Flame） |
+| `x` | 探测目标（GC） |
 | `c` | 清空采样（Hotspots 和 Flame） |
 | `s` | 切换 self/total 排序（Hotspots） |
 | `enter` / `backspace` / `esc` | 放大 / 缩小 / 重置（Flame） |
@@ -114,6 +118,16 @@ GC 标签页显示回收占用的时间比例、每秒回收次数、被追踪�
 在 Linux 上使用 `run -- CMD` 时，目标会以允许同一用户的任意进程读取的方式启动，
 因为浏览器会话并不是它的父进程。
 
+### 探测
+
+上面的一切都是从外部读目标的内存。`sgrud probe` 是唯一的例外：它用
+`sys.remote_exec` 让目标的主线程在下一个安全点运行一段短脚本，报告解释器没有
+放进内存里的东西。包括 gc 的阈值和与之比较的计数、回收器是否启用、多少对象被
+冻结或落在 `gc.garbage` 里、分配器持有的块数、模块和线程数，加 `-t N` 还有按
+类型统计的被追踪对象直方图，目标已经开着 tracemalloc 的话也会带回一份快照。
+GC 标签页按 `x` 运行的是同一个探测。它会占用目标主线程几毫秒，带类型直方图时
+更多，而且要等主线程到达安全点，主线程卡在 C 代码里时会超时。sgrud 从不自行运行它。
+
 ## 作为库使用
 
 TUI 只是一个前端。所有数据都来自 `Monitor`，它返回普通的冻结 dataclass：
@@ -132,6 +146,8 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
     print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.to_dict())  # JSON friendly
+    result = m.probe(types=5)  # runs code in the target, see Probing
+    print(result.gc_threshold, result.gc_count, result.types)
 ```
 
 `Monitor.stream(interval)` 会持续产出快照，直到目标退出，然后抛出 `ProcessExited`。
@@ -186,7 +202,7 @@ macOS 上只有 root 能读取其它进程的内存，请使用 `sudo`。Windows
 
 给 `Monitor.attach` 传入 `require_full=True` 可以让它在权限不足时直接失败，
 而不是降级运行。使用 `-X disable-remote-debug` 启动的目标仍然可以被观察，
-因为该选项只禁用代码注入，而 sgrud 并不使用代码注入。
+因为该选项只禁用代码注入。它唯一挡住的是 `sgrud probe`。
 
 ## 开发
 

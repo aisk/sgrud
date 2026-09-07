@@ -43,6 +43,9 @@ sgrud profile PID --folded          zusammengefaltete Stacks für flamegraph.pl 
 sgrud profile PID -o out.html       Flame-Graph schreiben, oder .json / .pstats / .txt / .jsonl / ein Verzeichnis
 sgrud profile PID -o out.bin        Aufzeichnung für `python -m profiling.sampling replay`
 sgrud PID --record out.bin          die Oberfläche, wobei jedes Sample aufgezeichnet wird
+
+sgrud probe PID                     ein Skript im Ziel ausführen: gc-Schwellen, Allokator, Threads
+sgrud probe PID -t 10               zusätzlich verfolgte Objekte nach Typ zählen, die zehn häufigsten
 ```
 
 `--no-stacks`, `--no-tasks` und `--no-gc` blenden Abschnitte, die Sie nicht
@@ -94,6 +97,7 @@ Oberfläche, über Moduswechsel hinweg.
 | `q` | beenden |
 | `f` | Thread-Filter (Hotspots und Flame) |
 | `m` | Sampling-Modus durchschalten (Hotspots und Flame) |
+| `x` | Ziel sondieren (GC) |
 | `c` | Samples löschen (Hotspots und Flame) |
 | `s` | Sortierung self/total umschalten (Hotspots) |
 | `enter` / `backspace` / `esc` | hineinzoomen / herauszoomen / zurücksetzen (Flame) |
@@ -143,6 +147,22 @@ Unter Linux wird das Ziel bei
 `run -- CMD` so gestartet, dass jeder Prozess desselben Benutzers es lesen darf,
 da die Browser-Sitzungen nicht sein Elternprozess sind.
 
+### Sondieren
+
+Alles oben liest den Speicher des Ziels von außen. `sgrud probe` ist die
+einzige Ausnahme: Es lässt über `sys.remote_exec` den Hauptthread des Ziels
+an seinem nächsten sicheren Punkt ein kurzes Skript ausführen, das meldet,
+was der Interpreter nicht im Speicher preisgibt. Das sind die gc-Schwellen
+und die Zähler, mit denen sie verglichen werden, ob der Collector aktiv ist,
+wie viele Objekte eingefroren sind oder in `gc.garbage` liegen, die Zahl der
+Blöcke des Allokators, die Zahl der Module und Threads, mit `-t N` ein
+Histogramm der verfolgten Objekte nach Typ und ein tracemalloc-Schnappschuss,
+falls das Ziel das Tracing bereits eingeschaltet hat. `x` im GC-Tab führt
+dieselbe Sonde aus. Sie kostet das Ziel einige Millisekunden auf seinem
+Hauptthread, mit Typ-Histogramm mehr, und wartet darauf, dass dieser Thread
+einen sicheren Punkt erreicht, ein in C-Code festhängender Hauptthread lässt
+sie also in den Timeout laufen. sgrud führt sie nie von sich aus aus.
+
 ## Bibliothek
 
 Die TUI ist nur ein Frontend. Alles stammt aus `Monitor`, das einfache
@@ -162,6 +182,8 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
     print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.to_dict())  # JSON friendly
+    result = m.probe(types=5)  # runs code in the target, see Probing
+    print(result.gc_threshold, result.gc_count, result.types)
 ```
 
 `Monitor.stream(interval)` liefert Schnappschüsse, bis das Ziel beendet ist,
@@ -227,7 +249,7 @@ andere erfordern einen Administrator.
 Übergeben Sie `require_full=True` an `Monitor.attach`, um fehlzuschlagen statt
 in den eingeschränkten Modus zu wechseln. Ein mit `-X disable-remote-debug`
 gestartetes Ziel lässt sich weiterhin untersuchen, da dieses Flag nur die
-Code-Injektion abschaltet, die sgrud nicht verwendet.
+Code-Injektion abschaltet. Das Einzige, was es blockiert, ist `sgrud probe`.
 
 ## Entwicklung
 

@@ -318,6 +318,20 @@ class Monitor:
         """
         return self.sample("async").tasks()
 
+    def probe(self, *, types: int = 0, allocations: int = 10, timeout: float = 5.0):
+        """Run a script inside the target, see :func:`sgrud.probe.probe`.
+
+        This is the one thing sgrud does that touches the target: its main
+        thread runs the script at its next safe point. Fails in limited
+        mode, since injecting code needs the same access as reading memory.
+        """
+        from .probe import probe
+
+        if self.limited is not None:
+            raise AttachError(self.pid, "limited mode", self.limited)
+        self._check_alive()
+        return probe(self.pid, types=types, allocations=allocations, timeout=timeout)
+
     def read_stats(self, mode: str = "wall") -> dict[str, int | float]:
         """Counters of the reader used for ``mode``: memory reads, bytes, cache hits.
 
