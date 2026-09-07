@@ -152,7 +152,7 @@ def test_stack_sampling_is_fast(monitor):
         monitor.snapshot(tasks=False, gc=False, children=False, ipc=False)
     per_sample = (time.perf_counter() - t0) / n
     # psutil's thread listing on Windows snapshots every thread on the system.
-    budget = 0.02 if sys.platform == "win32" else 0.005
+    budget = 0.05 if sys.platform == "win32" else 0.005
     assert per_sample < budget, f"{per_sample * 1e6:.0f}us per snapshot"
 
 

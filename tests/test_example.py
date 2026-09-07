@@ -47,7 +47,7 @@ def test_demo_app_has_something_on_every_tab():
             ipc = snap.ipc
             assert ipc is not None
             kinds = ipc.counts()
-            assert any(f.kind == "socket" and f.status == "LISTEN" for f in ipc.files)
+            assert any(f.kind == "socket" and f.status == "LISTEN" for f in ipc.files), ipc.files
             if sys.platform.startswith("linux"):
                 # psutil lists no pipes and fewer sockets elsewhere.
                 assert kinds.get("pipe", 0) >= 1 and kinds.get("socket", 0) >= 6, kinds

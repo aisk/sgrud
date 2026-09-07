@@ -220,7 +220,7 @@ def start_lock_holder(path: str) -> subprocess.Popen[bytes]:
 def start_non_python() -> subprocess.Popen[bytes]:
     # Reads stdin, so it exits on its own when the demo dies.
     if sys.platform == "win32":
-        return subprocess.Popen(["more"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL)
+        return subprocess.Popen(["findstr", "^"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL)
     return subprocess.Popen(["cat"], stdin=subprocess.PIPE)
 
 
