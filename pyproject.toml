@@ -1,6 +1,6 @@
 [project]
 name = "sgrud"
-version = "1.1.2"
+version = "0.2.0"
 description = "Attach to a running CPython process and inspect memory, CPU, threads, asyncio tasks, stacks and GC with near-zero overhead"
 readme = "README.md"
 requires-python = ">=3.15"
