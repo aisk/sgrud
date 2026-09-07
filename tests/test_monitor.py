@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 import time
@@ -358,10 +359,13 @@ def test_ipc_section_lists_descriptors_locks_and_waits():
             assert any("listen" in line and port.decode() in line for line in lines)
             if sys.platform == "win32":
                 return
-            lock_file = next(f for f in ipc.files if f.target == lock_path.decode())
-            assert lock_file.kind == "file" and lock_file.mode == "w"
+            # macOS reports /tmp files under /private/tmp and has no open mode.
+            real = os.path.realpath(lock_path.decode())
+            lock_file = next(f for f in ipc.files if os.path.realpath(f.target) == real)
+            assert lock_file.kind == "file"
             if not sys.platform.startswith("linux"):
                 return
+            assert lock_file.mode == "w"
             # A pipe whose read end a thread sits in, its write end in the same process.
             pipe = ipc.file(int(pipe_fd))
             assert pipe is not None and pipe.kind == "pipe" and pipe.mode == "r"
@@ -397,7 +401,6 @@ def test_ipc_section_lists_descriptors_locks_and_waits():
         for child in psutil.wait_procs(children, timeout=5)[1]:
             child.kill()
         import contextlib
-        import os
 
         with contextlib.suppress(OSError, NameError):
             os.unlink(lock_path.decode())

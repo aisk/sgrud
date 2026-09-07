@@ -292,7 +292,7 @@ def _with_connections(files: list[OpenFile], conns: Iterable[Any]) -> list[OpenF
     """
     import dataclasses
 
-    by_fd: dict[int, OpenFile] = {f.fd: f for f in files}
+    by_fd: dict[int, int] = {f.fd: i for i, f in enumerate(files) if f.fd >= 0}
     out = list(files)
     for c in conns:
         fd = -1 if c.fd is None else c.fd
@@ -302,8 +302,9 @@ def _with_connections(files: list[OpenFile], conns: Iterable[Any]) -> list[OpenF
         local, remote = _addr(c.laddr), _addr(c.raddr)
         status = "" if c.status == psutil.CONN_NONE else c.status
         if fd in by_fd:
-            out[out.index(by_fd[fd])] = dataclasses.replace(
-                by_fd[fd], kind="socket", family=family, local=local, remote=remote, status=status
+            i = by_fd[fd]
+            out[i] = dataclasses.replace(
+                out[i], kind="socket", family=family, local=local, remote=remote, status=status
             )
         else:
             out.append(
