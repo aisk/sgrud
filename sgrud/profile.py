@@ -20,6 +20,9 @@ from .models import Frame, Task, Thread, ThreadStatus
 FunctionKey = tuple[str, str]  # (funcname, filename)
 StackKey = tuple[FunctionKey, ...]  # outermost function first
 
+#: The marker frame the unwinder inserts where a garbage collection is running.
+GC_KEY: FunctionKey = ("<GC>", "~")
+
 #: ``wall`` counts every thread that has a Python stack. ``gil`` counts only
 #: the thread holding the GIL, which is where CPU time goes in CPython.
 #: ``async`` samples asyncio tasks instead of threads: every task counts,
@@ -42,6 +45,18 @@ class HotspotRow:
     @property
     def synthetic(self) -> bool:
         return self.filename == "~" or self.funcname.startswith("<")
+
+
+@dataclass(frozen=True, slots=True)
+class GCSite:
+    """A function that was running when a garbage collection started."""
+
+    funcname: str
+    filename: str
+    #: Samples in which a collection triggered from this function was running.
+    samples: int
+    #: Relative to all samples of the selected threads.
+    percent: float
 
 
 @dataclass(slots=True)
@@ -226,6 +241,40 @@ class Hotspots:
         else:
             rows.sort(key=lambda r: (-r.self_samples, -r.total_samples, r.funcname))
         return rows[:limit] if limit is not None else rows
+
+    def gc_sites(
+        self, *, thread: int | None = None, limit: int | None = None
+    ) -> tuple[int, int, list[GCSite]]:
+        """Where garbage collections were triggered from.
+
+        Returns ``(gc_samples, samples, sites)``: how many samples of the
+        selected thread(s) were inside a collection, how many samples there
+        were in all, and the functions the collections interrupted, most
+        frequent first. The triggering function is the frame right outside
+        the ``<GC>`` marker, so this answers which allocation sites make the
+        collector run. Needs the monitor's ``gc_markers`` option, the default.
+        """
+        with self._lock:
+            if thread is None:
+                selected = list(self._threads.values())
+            else:
+                counts = self._threads.get(thread)
+                selected = [counts] if counts else []
+            samples = sum(c.samples for c in selected)
+            by_site: Counter[FunctionKey] = Counter()
+            gc_samples = 0
+            for c in selected:
+                for stack, n in c.stacks.items():
+                    try:
+                        i = stack.index(GC_KEY)
+                    except ValueError:
+                        continue
+                    gc_samples += n
+                    by_site[stack[i - 1] if i else ("<no Python frame>", "~")] += n
+        sites = [
+            GCSite(key[0], key[1], n, 100.0 * n / samples) for key, n in by_site.most_common(limit)
+        ]
+        return gc_samples, samples, sites
 
     def _stacks(self, thread: int | None) -> list[tuple[int, dict[StackKey, int]]]:
         with self._lock:

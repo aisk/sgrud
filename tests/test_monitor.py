@@ -88,6 +88,36 @@ def test_gc_stats(monitor):
     assert gen0.collections > 0
     assert gen0.history and gen0.history[0].generation == 0
     assert gen0.history[0].duration >= 0
+    assert gen0.history[0].index == gen0.collections
+    # The target's clock and ours are the same clock.
+    assert 0 <= gen0.history[0].age < 60
+    assert gen0.history[0].heap_size > 0
+    time.sleep(0.1)
+    again = monitor.snapshot(stacks=False, tasks=False).gc[0]
+    assert again.rate is not None and again.rate >= 0
+    assert again.time_share is not None and 0 <= again.time_share < 1
+    assert len(again.history) >= len(gen0.history)
+
+
+def test_memory_details(monitor):
+    first = monitor.snapshot(stacks=False, tasks=False, gc=False).process
+    time.sleep(0.1)
+    p = monitor.snapshot(stacks=False, tasks=False, gc=False).process
+    m = p.memory
+    assert m.rss > 0 and m.vms > 0
+    assert p.page_faults >= first.page_faults > 0
+    assert p.fault_rate is not None and p.fault_rate >= 0
+    if sys.platform != "win32":
+        assert m.uss > 0  # psutil reads it on macOS too
+    if sys.platform == "linux":
+        assert 0 < m.anon < m.rss and m.file > 0
+        assert m.anon + m.file + m.shmem == m.rss
+        assert m.pss >= m.uss > 0
+        assert m.brk > 0 and m.anon_mapped > 0
+        assert m.peak_vms >= m.vms
+        assert p.limits.oom_score >= 0
+    else:
+        assert p.limits.oom_score == -1
 
 
 def test_partial_snapshots_are_cheap(monitor):

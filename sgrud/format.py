@@ -6,7 +6,7 @@ import math
 import os
 from collections.abc import Iterable
 
-from .models import Frame, Snapshot, Task, Thread
+from .models import Frame, Process, Snapshot, Task, Thread
 
 
 def human_bytes(n: int) -> str:
@@ -98,18 +98,99 @@ def format_task_tree(snap: Snapshot) -> list[str]:
     return lines
 
 
+def human_rate(value: float | None, unit: str = "/s") -> str:
+    if value is None:
+        return "-"
+    if value == 0 or value >= 100:
+        return f"{value:.0f}{unit}"
+    return f"{value:.1f}{unit}" if value >= 1 else f"{value:.2f}{unit}"
+
+
+def human_count(n: int) -> str:
+    return "?" if n < 0 else f"{n:,}"
+
+
+def memory_rows(p: Process) -> list[tuple[str, list[tuple[str, str]]]]:
+    """Labelled groups of memory figures, leaving out what the platform lacks.
+
+    Each group is ``(label, [(name, value), ...])`` with the first entry
+    of a group being the headline figure. Used by the text dump and the TUI.
+    """
+    m = p.memory
+    lim = p.limits
+
+    def group(label: str, *pairs: tuple[str, int | None]) -> tuple[str, list[tuple[str, str]]]:
+        return label, [(name, human_bytes(value)) for name, value in pairs if value]
+
+    rows = [
+        group(
+            "rss",
+            ("", m.rss),
+            ("peak", m.hwm),
+            ("anon", m.anon),
+            ("file", m.file),
+            ("shmem", m.shmem),
+        ),
+        group("uss", ("", m.uss), ("pss", m.pss), ("swap", m.swap)),
+        group("vms", ("", m.vms), ("peak", m.peak_vms), ("data", m.data), ("shared", m.shared)),
+        group("brk", ("", m.brk), ("anon mapped", m.anon_mapped), ("huge pages", m.huge)),
+    ]
+    faults: list[tuple[str, str]] = [
+        ("", human_rate(p.fault_rate)),
+        ("major", human_rate(p.major_fault_rate)),
+        ("total", human_count(p.page_faults)),
+    ]
+    rows.append(("faults", faults))
+    limits: list[tuple[str, str]] = []
+    if lim.cgroup_limit:
+        pct = lim.cgroup_percent
+        limits.append(
+            ("cgroup", f"{human_bytes(lim.cgroup_usage)} of {human_bytes(lim.cgroup_limit)}")
+        )
+        if pct is not None:
+            limits.append(("used", f"{pct:.0f}%"))
+        if lim.cgroup_high:
+            limits.append(("high", human_bytes(lim.cgroup_high)))
+    elif lim.cgroup_usage:
+        limits.append(("cgroup", human_bytes(lim.cgroup_usage)))
+    if lim.address_space:
+        limits.append(("address space", human_bytes(lim.address_space)))
+    if lim.oom_score >= 0:
+        limits.append(("oom score", str(lim.oom_score)))
+    rows.append(("limits", limits))
+    return [(label, pairs) for label, pairs in rows if pairs]
+
+
+def format_memory(p: Process) -> list[str]:
+    lines = []
+    for label, pairs in memory_rows(p):
+        parts = [f"{name} {value}".strip() for name, value in pairs]
+        lines.append(f"{label}={parts[0]}" + "".join(f"  {part}" for part in parts[1:]))
+    return lines
+
+
 def format_gc(snap: Snapshot) -> list[str]:
     lines = []
+    share = snap.gc_time_share
+    if share is not None:
+        lines.append(f"time in gc {share * 100:.2f}%  {human_rate(snap.gc_rate)} collections")
+    for t in snap.collecting:
+        lines.append(f"collecting now in thread {t.tid} {t.name}".rstrip())
     for g in snap.gc:
-        lines.append(
+        line = (
             f"gen{g.generation}: {g.collections} collections, {g.collected} collected, "
             f"{g.uncollectable} uncollectable, total {human_duration(g.total_duration)}, "
-            f"heap {g.heap_size}"
+            f"mean {human_duration(g.mean_duration)}, heap {human_count(g.heap_size)}"
         )
+        if g.rate is not None and g.time_share is not None:
+            line += f", {human_rate(g.rate)}, {g.time_share * 100:.2f}% of time"
+        lines.append(line)
         for c in g.history[:3]:
+            ago = "" if math.isnan(c.age) else f"{human_duration(max(c.age, 0.0))} ago, "
             lines.append(
-                f"    last: {human_duration(c.duration)} collected={c.collected} "
-                f"candidates={c.candidates} heap={c.heap_size}"
+                f"    #{c.index}: {ago}{human_duration(c.duration)} "
+                f"collected={human_count(c.collected)} survivors={human_count(c.survivors)} "
+                f"heap={human_count(c.heap_size)}"
             )
     return lines
 
@@ -124,13 +205,11 @@ def format_snapshot(
     max_frames: int | None = None,
 ) -> str:
     p = snap.process
-    m = p.memory
     lines = [
         f"pid {p.pid}  {os.path.basename(p.exe) or '?'}  {' '.join(p.cmdline)[:80]}",
         f"state={p.state} threads={p.num_threads} uptime={human_duration(p.uptime)} "
         f"cpu={percent(p.cpu_percent)}%  utime={p.user_time:.2f}s stime={p.system_time:.2f}s",
-        f"rss={human_bytes(m.rss)} vms={human_bytes(m.vms)} hwm={human_bytes(m.hwm)} "
-        f"swap={human_bytes(m.swap)} data={human_bytes(m.data)} shared={human_bytes(m.shared)}",
+        *format_memory(p),
     ]
     if threads:
         lines.append("")

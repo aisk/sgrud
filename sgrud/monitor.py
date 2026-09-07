@@ -5,19 +5,83 @@ from __future__ import annotations
 import subprocess
 import threading
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 
 from . import osproc
 from .errors import AttachError, ProcessExited
-from .models import Process, Snapshot, Task, Thread, ThreadStatus
-from .remote import RemoteInspector, access_hint, interpreter_pid
+from .models import GCGeneration, Process, Snapshot, Task, Thread, ThreadStatus
+from .remote import GCRecord, RemoteInspector, access_hint, build_gc, interpreter_pid
+
+#: Collections kept per generation across snapshots.
+GC_HISTORY = 200
 
 
 @dataclass(slots=True)
 class _CpuSample:
     wall: float
     cpu: float
+
+
+@dataclass(slots=True)
+class _RateSample:
+    wall: float
+    values: tuple[float, ...]
+
+
+def _rates(
+    prev: _RateSample | None, now: float, values: tuple[float, ...]
+) -> tuple[float | None, ...]:
+    """Per-second change of each value since ``prev``, ``None`` without one."""
+    if prev is None or now <= prev.wall:
+        return (None,) * len(values)
+    elapsed = now - prev.wall
+    return tuple(max(0.0, (v - p) / elapsed) for v, p in zip(values, prev.values, strict=True))
+
+
+class _GCTracker:
+    """Accumulates GC ring records across reads and derives rates.
+
+    The target keeps only the last few collections per generation (11 for
+    the young generation, 3 for the others), so at a one second refresh a
+    busy process has already overwritten most of them. Keeping every record
+    seen gives a continuous history, and resolves the per-collection
+    figures of records whose predecessor was read earlier.
+    """
+
+    def __init__(self, limit: int = GC_HISTORY) -> None:
+        self.limit = limit
+        self._records: dict[int, dict[int, GCRecord]] = {}
+        self._prev: dict[int, _RateSample] = {}
+
+    def update(
+        self, records: Iterable[GCRecord], *, now: float, now_ns: int
+    ) -> tuple[GCGeneration, ...]:
+        latest: dict[int, GCRecord] = {}
+        for r in records:
+            slots = self._records.setdefault(r.generation, {})
+            slots[r.index] = r
+            if r.generation not in latest or r.index > latest[r.generation].index:
+                latest[r.generation] = r
+        for slots in self._records.values():
+            if len(slots) > self.limit:
+                for index in sorted(slots)[: len(slots) - self.limit]:
+                    del slots[index]
+        rates: dict[int, tuple[float | None, float | None]] = {}
+        for gen, r in latest.items():
+            sample = _RateSample(now, (float(r.index), r.duration))
+            rate, share = _rates(self._prev.get(gen), now, sample.values)
+            self._prev[gen] = sample
+            rates[gen] = (rate, share)
+        # A generation with no collection yet is not among the records at
+        # all, so it gets no sample and its rates stay unknown until the
+        # second snapshot after its first collection.
+        return build_gc(
+            (r for slots in self._records.values() for r in slots.values()),
+            now_ns=now_ns,
+            limit=self.limit,
+            rates=rates,
+        )
 
 
 class Monitor:
@@ -36,9 +100,19 @@ class Monitor:
         child: subprocess.Popen[bytes] | None = None,
         native_frames: bool = True,
         gc_markers: bool = True,
-        cache_frames: bool = True,
+        cache_frames: bool | None = None,
     ):
+        """``cache_frames`` defaults to the opposite of ``gc_markers``.
+
+        The unwinder's frame cache returns the cached stack whenever the
+        frame addresses are unchanged, and a running collection does not
+        change them, so with the cache on the ``<GC>`` marker never shows
+        up (CPython 3.15). Reading a stack without the cache costs a few
+        microseconds more.
+        """
         osproc.ensure_supported()
+        if cache_frames is None:
+            cache_frames = not gc_markers
         self.pid = pid
         self._child = child
         self._inspector: RemoteInspector | None = None
@@ -54,6 +128,8 @@ class Monitor:
         )
         self._proc_cpu: _CpuSample | None = None
         self._thread_cpu: dict[int, _CpuSample] = {}
+        self._faults: _RateSample | None = None
+        self._gc = _GCTracker()
         try:
             self._stats = osproc.ProcessStats(pid)
         except ProcessLookupError as e:
@@ -248,6 +324,9 @@ class Monitor:
         except ProcessLookupError as e:
             raise ProcessExited(self.pid) from e
 
+        faults = _RateSample(now, (float(stat.page_faults), float(stat.major_faults)))
+        fault_rate, major_fault_rate = _rates(self._faults, now, faults.values)
+        self._faults = faults
         process = Process(
             pid=self.pid,
             exe=stat.exe,
@@ -259,6 +338,11 @@ class Monitor:
             system_time=stat.stime,
             uptime=max(time.time() - self._stats.start_time, 0.0),
             cpu_percent=self._cpu_percent(None, now, stat.utime + stat.stime),
+            page_faults=stat.page_faults,
+            major_faults=stat.major_faults,
+            fault_rate=fault_rate,
+            major_fault_rate=major_fault_rate,
+            limits=stat.limits,
         )
 
         remote: dict[int, tuple[int, ThreadStatus, tuple]] = {}
@@ -329,11 +413,13 @@ class Monitor:
             except Exception as e:
                 errors["tasks"] = f"{type(e).__name__}: {e}"
 
-        gc_list = ()
+        gc_list: tuple[GCGeneration, ...] = ()
         if gc and inspector is not None:
             try:
                 with self._lock:
-                    gc_list = inspector.gc()
+                    records = inspector.gc_records()
+                    now_ns = time.perf_counter_ns()
+                gc_list = self._gc.update(records, now=time.monotonic(), now_ns=now_ns)
             except ProcessExited:
                 raise
             except Exception as e:

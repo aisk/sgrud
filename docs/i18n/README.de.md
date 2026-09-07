@@ -80,6 +80,15 @@ Graph wächst von unten nach oben und gibt jedem Thread in der ersten Zeile
 einen eigenen Block, sodass ein untätiger Thread als hohe Säule erscheint,
 statt mit den anderen vermischt zu werden.
 
+Der GC-Tab zeigt den Anteil der Zeit, der auf Collections entfällt,
+Collections pro Sekunde, die Zahl der verfolgten Objekte und eine Historie der
+Collections. Das Ziel behält nur seine letzten 11 Collections der jungen und 3
+der alten Generationen, deshalb sammelt der Monitor jeden Eintrag, den er
+gesehen hat. Läuft der Sampler, nennt der Tab auch die Funktionen, aus denen
+Collections ausgelöst wurden, also die Stellen mit dem meisten
+Allokationsaufkommen. Der Process-Tab schlüsselt den Speicher so weit auf, wie
+es die Plattform erlaubt, siehe [Plattformen](#plattformen).
+
 ![Der Tasks-Tab mit dem Baum der asyncio-Tasks und dem, worauf jeder Task wartet](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
 
 *Der Tasks-Tab: asyncio-Tasks als Baum, jeder mit den Coroutine-Frames, in denen er wartet.*
@@ -120,7 +129,8 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(t.tid, t.name, t.status.describe(), t.cpu_percent, t.frames[:1])
     for task in snap.tasks:
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
-    print(snap.gc[0].collections, snap.gc[0].history[:1])
+    print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
+    print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
     print(snap.to_dict())  # JSON friendly
 ```
 
@@ -149,14 +159,18 @@ verhalten sich überall gleich. Die Prozess- und Thread-Abrechnung kommt über
 psutil vom Betriebssystem, und dort unterscheiden sich die Plattformen.
 
 - **Linux** meldet alles, einschließlich des Scheduler-Zustands jedes Threads,
-  der im wall-Modus einen Thread als auf der CPU markiert.
+  der im wall-Modus einen Thread als auf der CPU laufend markiert, sowie das
+  vollständige Speicherbild: anonymer und dateigestützter Anteil des rss, USS
+  und PSS, brk-Heap und anonyme Mappings, Transparent Huge Pages,
+  Page-Fault-Rate, das Speicherlimit der cgroup und den OOM-Score.
 - **Windows** hat Thread-Namen und CPU-Zeit pro Thread, aber keinen
   Scheduler-Zustand, daher zeigen Threads im wall-Modus `?` statt `cpu` /
-  `idle`. Swap und gemeinsam genutzter Speicher werden nicht gemeldet.
+  `idle`. Der Speicher umfasst `rss`, `vms`, das Working-Set-Maximum, private
+  Bytes, USS und die Page-Fault-Rate.
 - **macOS** kann Betriebssystem-Threads nicht den Thread-IDs des Interpreters
-  zuordnen, daher erscheinen Threads ohne Namen und CPU-Werte, und beim
-  Speicher werden nur `rss` / `vms` gemeldet. Den Speicher eines anderen
-  Prozesses zu lesen erfordert root, führen Sie sgrud also mit `sudo` aus.
+  zuordnen, daher erscheinen Threads ohne Namen und CPU-Werte. Der Speicher
+  umfasst `rss`, `vms`, USS und die Page-Fault-Rate. Den Speicher eines
+  anderen Prozesses zu lesen erfordert root, also sgrud mit `sudo` starten.
 
 ## Berechtigungen
 

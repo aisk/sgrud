@@ -5,8 +5,10 @@ executable, state) on Linux, macOS and Windows. Per-thread data goes past
 what psutil exposes, so it is platform specific:
 
 - Linux: one read of ``/proc/<pid>/task/<tid>/stat`` gives CPU times, the
-  scheduler state and the thread name, and ``/proc/<pid>/status`` adds
-  peak RSS and swap.
+  scheduler state and the thread name. ``/proc/<pid>/status``,
+  ``smaps_rollup``, ``maps`` and ``stat`` add the memory breakdown and
+  page faults, and the cgroup files add the container's memory limit.
+  Together those reads cost well under a millisecond.
 - Windows: psutil lists threads with CPU times and ``GetThreadDescription``
   adds the name. Windows has no cheap per-thread scheduler state.
 - macOS: psutil numbers threads by index rather than by the id that
@@ -28,7 +30,7 @@ from typing import Any
 import psutil
 
 from .errors import NotSupported
-from .models import Memory
+from .models import Memory, MemoryLimits
 
 LINUX = sys.platform.startswith("linux")
 MACOS = sys.platform == "darwin"
@@ -61,6 +63,11 @@ def ensure_supported() -> None:
         raise NotSupported(f"sgrud supports Linux, macOS and Windows, not {sys.platform}")
 
 
+#: How often the unique set size is refreshed on macOS and Windows, where
+#: psutil walks every page of the working set to compute it.
+USS_INTERVAL = 1.0
+
+
 @dataclass(frozen=True, slots=True)
 class ProcessStat:
     exe: str
@@ -70,6 +77,9 @@ class ProcessStat:
     stime: float
     num_threads: int
     memory: Memory
+    page_faults: int = 0
+    major_faults: int = 0
+    limits: MemoryLimits = MemoryLimits()
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +115,8 @@ class ProcessStats:
             self.start_time: float = self._proc.create_time()
         except psutil.NoSuchProcess as e:
             raise ProcessLookupError(pid) from e
+        self._uss: tuple[float, int] = (float("-inf"), 0)
+        self._cgroup: _CgroupFiles | None = _linux_cgroup_files(pid) if LINUX else None
 
     def is_running(self) -> bool:
         """Whether the process exists and its pid has not been recycled."""
@@ -124,6 +136,25 @@ class ProcessStats:
                 cmdline = tuple(_optional(p.cmdline, ()))
         except psutil.NoSuchProcess as e:
             raise ProcessLookupError(self.pid) from e
+        if LINUX:
+            memory, faults, major = _linux_memory(self.pid, mem)
+            limits = _linux_limits(self.pid, self._proc, self._cgroup)
+        elif WINDOWS:
+            memory = Memory(
+                rss=mem.rss,
+                vms=mem.vms,
+                hwm=mem.peak_wset,
+                swap=0,
+                data=mem.private,
+                shared=0,
+                uss=self._uss_cached(),
+            )
+            faults, major, limits = mem.num_page_faults, 0, MemoryLimits()
+        else:
+            memory = Memory(
+                rss=mem.rss, vms=mem.vms, hwm=0, swap=0, data=0, shared=0, uss=self._uss_cached()
+            )
+            faults, major, limits = mem.pfaults, mem.pageins, MemoryLimits()
         return ProcessStat(
             exe=exe,
             cmdline=cmdline,
@@ -131,8 +162,27 @@ class ProcessStats:
             utime=cpu.user,
             stime=cpu.system,
             num_threads=num_threads,
-            memory=_memory(self.pid, mem),
+            memory=memory,
+            page_faults=faults,
+            major_faults=major,
+            limits=limits,
         )
+
+    def _uss_cached(self) -> int:
+        """The unique set size, refreshed at most every :data:`USS_INTERVAL`."""
+        import time
+
+        now = time.monotonic()
+        stamp, value = self._uss
+        if now - stamp >= USS_INTERVAL:
+            try:
+                value = self._proc.memory_full_info().uss
+            except psutil.NoSuchProcess as e:
+                raise ProcessLookupError(self.pid) from e
+            except psutil.Error, OSError:
+                value = 0
+            self._uss = (now, value)
+        return value
 
     def threads(self) -> dict[int, ThreadStat]:
         """OS threads keyed by the id ``_remote_debugging`` uses for them.
@@ -153,19 +203,6 @@ class ProcessStats:
             t.id: ThreadStat(t.id, _windows_thread_name(t.id), "", t.user_time, t.system_time)
             for t in raw
         }
-
-
-def _memory(pid: int, mem: Any) -> Memory:
-    if LINUX:
-        hwm, swap = _linux_status_memory(pid)
-        return Memory(
-            rss=mem.rss, vms=mem.vms, hwm=hwm, swap=swap, data=mem.data, shared=mem.shared
-        )
-    if WINDOWS:
-        return Memory(
-            rss=mem.rss, vms=mem.vms, hwm=mem.peak_wset, swap=0, data=mem.private, shared=0
-        )
-    return Memory(rss=mem.rss, vms=mem.vms, hwm=0, swap=0, data=0, shared=0)
 
 
 def exe(pid: int) -> str:
@@ -249,16 +286,163 @@ def _read(path: str) -> str:
         raise ProcessLookupError(path) from e
 
 
-def _linux_status_memory(pid: int) -> tuple[int, int]:
-    """(VmHWM, VmSwap) in bytes, which psutil's cheap memory_info() lacks."""
-    hwm = swap = 0
-    for line in _read(f"/proc/{pid}/status").splitlines():
-        key, _, rest = line.partition(":")
-        if key == "VmHWM":
-            hwm = int(rest.split()[0]) * 1024
-        elif key == "VmSwap":
-            swap = int(rest.split()[0]) * 1024
-    return hwm, swap
+def _kib_fields(text: str, wanted: tuple[str, ...]) -> dict[str, int]:
+    """Values in bytes of the ``Key:  123 kB`` lines named in ``wanted``."""
+    out = dict.fromkeys(wanted, 0)
+    for line in text.splitlines():
+        key, sep, rest = line.partition(":")
+        if sep and key in out:
+            out[key] = int(rest.split()[0]) * 1024
+    return out
+
+
+def _linux_memory(pid: int, mem: Any) -> tuple[Memory, int, int]:
+    """(Memory, page faults, major faults) from /proc, on top of psutil's statm figures."""
+    status = _kib_fields(
+        _read(f"/proc/{pid}/status"),
+        ("VmHWM", "VmSwap", "VmPeak", "RssAnon", "RssFile", "RssShmem"),
+    )
+    try:
+        rollup = _kib_fields(
+            _read(f"/proc/{pid}/smaps_rollup"),
+            ("Pss", "Private_Clean", "Private_Dirty", "AnonHugePages"),
+        )
+    except ProcessLookupError:
+        if not os.path.exists(f"/proc/{pid}"):
+            raise
+        rollup = {}  # kernels before 4.14
+    brk, anon_mapped = _linux_maps(_read(f"/proc/{pid}/maps"))
+    faults, major = _linux_faults(_read(f"/proc/{pid}/stat"))
+    memory = Memory(
+        rss=mem.rss,
+        vms=mem.vms,
+        hwm=status["VmHWM"],
+        swap=status["VmSwap"],
+        data=mem.data,
+        shared=mem.shared,
+        uss=rollup.get("Private_Clean", 0) + rollup.get("Private_Dirty", 0),
+        pss=rollup.get("Pss", 0),
+        anon=status["RssAnon"],
+        file=status["RssFile"],
+        shmem=status["RssShmem"],
+        brk=brk,
+        anon_mapped=anon_mapped,
+        huge=rollup.get("AnonHugePages", 0),
+        peak_vms=status["VmPeak"],
+    )
+    return memory, faults, major
+
+
+def _linux_maps(text: str) -> tuple[int, int]:
+    """(brk heap size, other anonymous private writable mappings) from /proc/<pid>/maps."""
+    brk = anon = 0
+    for line in text.splitlines():
+        fields = line.split(None, 5)
+        if len(fields) < 5:
+            continue
+        perms = fields[1]
+        path = fields[5].strip() if len(fields) > 5 else ""
+        if path == "[heap]":
+            lo, _, hi = fields[0].partition("-")
+            brk += int(hi, 16) - int(lo, 16)
+        elif not path.startswith("/") and path != "[stack]" and "rw" in perms and "p" in perms:
+            # inode 0 marks anonymous memory. Named pseudo mappings other
+            # than the stack ([anon:...] names, [vvar]) are anonymous too.
+            if fields[4] == "0":
+                lo, _, hi = fields[0].partition("-")
+                anon += int(hi, 16) - int(lo, 16)
+    return brk, anon
+
+
+def _linux_faults(stat: str) -> tuple[int, int]:
+    """(minor + major, major) page faults from /proc/<pid>/stat."""
+    fields = stat[stat.rindex(")") + 2 :].split()
+    # fields[0] is field 3 (state); minflt is field 10, majflt field 12.
+    minor, major = int(fields[7]), int(fields[9])
+    return minor + major, major
+
+
+@dataclass(frozen=True, slots=True)
+class _CgroupFiles:
+    limit: str
+    high: str
+    usage: str
+
+
+def _linux_cgroup_files(pid: int) -> _CgroupFiles | None:
+    """Paths of the memory limit files of the process's cgroup, if any.
+
+    Handles cgroup v2 (one ``0::/path`` line) and v1 (a line naming the
+    ``memory`` controller). Resolved once per process; a process rarely
+    moves between cgroups. Returns None when the files are not visible,
+    which is the case for the root cgroup and for a container watched
+    from outside its cgroup namespace.
+    """
+    try:
+        text = _read(f"/proc/{pid}/cgroup")
+    except ProcessLookupError:
+        return None
+    for line in text.splitlines():
+        _, _, rest = line.partition(":")
+        controllers, _, path = rest.partition(":")
+        if controllers == "":
+            base = f"/sys/fs/cgroup{path}"
+            files = _CgroupFiles(
+                f"{base}/memory.max", f"{base}/memory.high", f"{base}/memory.current"
+            )
+        elif "memory" in controllers.split(","):
+            base = f"/sys/fs/cgroup/memory{path}"
+            files = _CgroupFiles(
+                f"{base}/memory.limit_in_bytes", "", f"{base}/memory.usage_in_bytes"
+            )
+        else:
+            continue
+        if os.path.exists(files.limit):
+            return files
+    return None
+
+
+def _cgroup_bytes(path: str) -> int:
+    """A cgroup byte figure, 0 when unset, unlimited or unreadable."""
+    if not path:
+        return 0
+    try:
+        with open(path) as f:
+            text = f.read().strip()
+    except OSError:
+        return 0
+    if text == "max":
+        return 0
+    value = int(text)
+    # cgroup v1 spells "unlimited" as PAGE_COUNTER_MAX, a number near 2**63.
+    return 0 if value >= 1 << 62 else value
+
+
+def _linux_limits(pid: int, proc: psutil.Process, cgroup: _CgroupFiles | None) -> MemoryLimits:
+    import resource
+
+    address_space = 0
+    try:
+        soft, _ = proc.rlimit(resource.RLIMIT_AS)
+        # RLIM_INFINITY comes back as -1 or as its unsigned spelling.
+        address_space = 0 if soft < 0 or soft >= 1 << 62 else soft
+    except psutil.NoSuchProcess as e:
+        raise ProcessLookupError(pid) from e
+    except psutil.Error, OSError:
+        pass
+    try:
+        oom_score = int(_read(f"/proc/{pid}/oom_score").strip())
+    except ProcessLookupError, ValueError:
+        oom_score = -1
+    if cgroup is None:
+        return MemoryLimits(address_space=address_space, oom_score=oom_score)
+    return MemoryLimits(
+        cgroup_limit=_cgroup_bytes(cgroup.limit),
+        cgroup_high=_cgroup_bytes(cgroup.high),
+        cgroup_usage=_cgroup_bytes(cgroup.usage),
+        address_space=address_space,
+        oom_score=oom_score,
+    )
 
 
 def _linux_threads(pid: int) -> dict[int, ThreadStat]:

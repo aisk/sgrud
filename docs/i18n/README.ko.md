@@ -73,6 +73,8 @@ sgrud profile PID --folded          flamegraph.pl이나 speedscope용 접힌 스
 동작합니다. 플레임 그래프는 아래에서 위로 자라며 첫 번째 행에서 각 스레드에 고유한
 블록을 배정하므로, 유휴 스레드는 다른 스레드와 섞이지 않고 높은 기둥으로 나타납니다.
 
+GC 탭은 수집에 쓴 시간의 비율, 초당 수집 횟수, 추적 중인 객체 수, 수집 이력을 보여줍니다. 대상 프로세스는 최근 젊은 세대 11회와 오래된 세대 3회만 보관하므로 monitor가 본 기록을 모두 누적합니다. 샘플러가 돌고 있으면 수집을 유발한 함수, 즉 할당이 몰리는 곳도 표시합니다. Process 탭은 플랫폼이 허용하는 만큼 메모리를 나누어 보여줍니다. [플랫폼](#플랫폼)을 참고하세요.
+
 ![Tasks 탭. asyncio 태스크 트리와 각 태스크가 기다리는 대상을 표시](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
 
 *Tasks 탭: asyncio 태스크 트리. 각 태스크가 멈춰 있는 코루틴 프레임을 함께 표시.*
@@ -110,7 +112,8 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(t.tid, t.name, t.status.describe(), t.cpu_percent, t.frames[:1])
     for task in snap.tasks:
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
-    print(snap.gc[0].collections, snap.gc[0].history[:1])
+    print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
+    print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
     print(snap.to_dict())  # JSON friendly
 ```
 
@@ -138,14 +141,9 @@ print("\n".join(sampler.hotspots.folded()))  # flamegraph.pl input
 같게 동작합니다. 프로세스와 스레드 집계는 psutil을 통해 OS에서 가져오며,
 플랫폼별 차이는 여기에 있습니다.
 
-- **Linux**는 스레드별 스케줄러 상태를 포함해 모든 것을 보고합니다. wall 모드에서
-  스레드가 CPU 위에 있는지 표시하는 것이 바로 이 상태입니다.
-- **Windows**는 스레드 이름과 스레드별 CPU 시간은 있지만 스케줄러 상태가 없어서,
-  wall 모드에서 스레드가 `cpu` / `idle` 대신 `?`로 표시됩니다. swap과 공유
-  메모리는 보고되지 않습니다.
-- **macOS**는 OS 스레드를 인터프리터의 스레드 id와 맞출 수 없으므로 스레드에
-  이름과 CPU 수치가 없고, 메모리는 `rss` / `vms`만 보고됩니다. 다른 프로세스의
-  메모리를 읽으려면 root가 필요하므로 sgrud를 `sudo`로 실행하십시오.
+- **Linux**는 스레드별 스케줄러 상태를 포함해 모든 것을 보고합니다. wall 모드에서 스레드가 CPU 위에 있다고 표시하는 근거가 이것입니다. 메모리도 전부 나오며, rss 중 익명과 파일 매핑의 비중, USS와 PSS, brk 힙과 익명 매핑, 투명 대형 페이지, 페이지 폴트 속도, cgroup 메모리 한도, OOM 점수를 제공합니다.
+- **Windows**는 스레드 이름과 스레드별 CPU 시간은 있지만 스케줄러 상태가 없어서, wall 모드에서 스레드가 `cpu` / `idle` 대신 `?`로 표시됩니다. 메모리는 `rss`, `vms`, 워킹셋 최대치, 프라이빗 바이트, USS, 페이지 폴트 속도입니다.
+- **macOS**는 OS 스레드를 인터프리터의 스레드 id와 맞출 수 없으므로 스레드에 이름도 CPU 수치도 없습니다. 메모리는 `rss`, `vms`, USS, 페이지 폴트 속도입니다. 다른 프로세스의 메모리를 읽으려면 root가 필요하니 sgrud를 `sudo`로 실행하세요.
 
 ## 권한
 

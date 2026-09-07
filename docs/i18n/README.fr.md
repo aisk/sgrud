@@ -83,6 +83,15 @@ attribue à chaque thread son propre bloc sur la première ligne, si bien
 qu'un thread inactif apparaît comme une grande colonne au lieu d'être
 mélangé aux autres.
 
+L'onglet GC montre la part du temps passée à collecter, le nombre de collectes
+par seconde, le nombre d'objets suivis et un historique des collectes. La
+cible ne garde que ses 11 dernières collectes de la jeune génération et les 3
+dernières des anciennes, donc le monitor accumule chaque enregistrement qu'il
+a vu. Pendant que l'échantillonneur tourne, l'onglet nomme aussi les fonctions
+qui ont déclenché les collectes, c'est-à-dire là où les allocations se
+concentrent. L'onglet Process détaille la mémoire autant que la plateforme le
+permet, voir [Plateformes](#plateformes).
+
 ![L'onglet Tasks, montrant l'arbre des tâches asyncio et ce que chaque tâche attend](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
 
 *L'onglet Tasks : les tâches asyncio en arbre, chacune avec les frames de coroutine où elle est arrêtée.*
@@ -123,7 +132,8 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(t.tid, t.name, t.status.describe(), t.cpu_percent, t.frames[:1])
     for task in snap.tasks:
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
-    print(snap.gc[0].collections, snap.gc[0].history[:1])
+    print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
+    print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
     print(snap.to_dict())  # JSON friendly
 ```
 
@@ -152,17 +162,20 @@ Les piles, les tâches asyncio, le GC et le profileur proviennent de
 comptabilité des processus et des threads vient du système via psutil, et
 c'est là que les plateformes diffèrent.
 
-- **Linux** rapporte tout, y compris l'état d'ordonnancement de chaque
-  thread, qui sert à marquer un thread comme sur CPU en mode wall.
-- **Windows** a les noms de threads et le temps CPU par thread mais pas
-  d'état d'ordonnancement, donc en mode wall les threads affichent `?` au
-  lieu de `cpu` / `idle`. Le swap et la mémoire partagée ne sont pas
-  rapportés.
-- **macOS** ne peut pas faire correspondre les threads du système aux
-  identifiants de threads de l'interpréteur, donc les threads apparaissent
-  sans nom ni chiffres CPU et seuls `rss` / `vms` sont rapportés pour la
-  mémoire. Lire la mémoire d'un autre processus exige root, lancez donc
-  sgrud avec `sudo`.
+- **Linux** rapporte tout, y compris l'état d'ordonnancement de chaque thread,
+  qui est ce qui marque un thread comme étant sur le CPU en mode wall, et la
+  mémoire complète : la part anonyme et la part fichier du rss, USS et PSS, le
+  tas brk et les mappages anonymes, les huge pages transparentes, le taux de
+  défauts de page, la limite mémoire du cgroup et le score OOM.
+- **Windows** a les noms de threads et le temps CPU par thread mais pas d'état
+  d'ordonnancement, donc les threads affichent `?` au lieu de `cpu` / `idle`
+  en mode wall. La mémoire comprend `rss`, `vms`, le pic du working set, les
+  octets privés, USS et le taux de défauts de page.
+- **macOS** ne peut pas faire correspondre les threads du système aux id de
+  threads de l'interpréteur, donc les threads apparaissent sans nom ni
+  chiffres CPU. La mémoire comprend `rss`, `vms`, USS et le taux de défauts de
+  page. Lire la mémoire d'un autre processus demande root, lancez donc sgrud
+  avec `sudo`.
 
 ## Permissions
 

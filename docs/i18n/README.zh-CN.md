@@ -69,6 +69,10 @@ sgrud profile PID --folded          输出折叠栈，供 flamegraph.pl 或 spee
 第一行为每个线程分配一个独立的块，因此空闲线程会显示为一根高高的柱子，
 而不是混在其他线程里。
 
+GC 标签页显示回收占用的时间比例、每秒回收次数、被追踪的对象数和回收历史。目标进程自己只保留最近 11 次年轻代和 3 次老年代回收，
+所以 monitor 会把见过的记录累积起来。采样器运行时，这里还会列出触发回收的函数，
+也就是分配最频繁的地方。Process 标签页在平台允许的范围内拆分内存，见[平台](#平台)。
+
 ![Tasks 标签页，以树形显示 asyncio 任务及各任务正在等待的内容](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
 
 *Tasks 标签页：asyncio 任务树，每个任务附带它停留的协程帧。*
@@ -105,7 +109,8 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(t.tid, t.name, t.status.describe(), t.cpu_percent, t.frames[:1])
     for task in snap.tasks:
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
-    print(snap.gc[0].collections, snap.gc[0].history[:1])
+    print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
+    print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
     print(snap.to_dict())  # JSON friendly
 ```
 
@@ -131,13 +136,14 @@ print("\n".join(sampler.hotspots.folded()))  # flamegraph.pl input
 调用栈、asyncio 任务、GC 和性能分析都来自 `_remote_debugging`，在各平台上表现
 一致。进程和线程的统计信息通过 psutil 从操作系统获取，平台差异都在这里。
 
-- **Linux** 提供全部信息，包括线程的调度状态，wall 模式下正是靠它标记线程是否
-  在 CPU 上。
-- **Windows** 有线程名和线程级 CPU 时间，但没有调度状态，所以 wall 模式下线程
-  显示为 `?` 而不是 `cpu` / `idle`。不报告 swap 和共享内存。
-- **macOS** 无法把操作系统线程和解释器的线程 id 对应起来，所以线程没有名字和
-  CPU 数据，内存只有 `rss` / `vms`。读取其它进程的内存需要 root，请用 `sudo`
-  运行 sgrud。
+- **Linux** 提供全部信息，包括线程的调度状态，wall 模式下正是靠它标记线程是否在 CPU 上。
+  内存也是完整的，包括 rss 中匿名和文件映射各占多少、USS 和 PSS、
+  brk 堆和匿名映射、透明大页、缺页速率、cgroup 内存上限和 OOM 分数。
+- **Windows** 有线程名和线程级 CPU 时间，但没有调度状态，所以 wall 模式下线程显示为 `?` 而不是 `cpu` / `idle`。
+  内存有 `rss`、`vms`、工作集峰值、私有字节、USS 和缺页速率。
+- **macOS** 无法把操作系统线程和解释器的线程 id 对应起来，所以线程没有名字和 CPU 数据。
+  内存有 `rss`、`vms`、USS 和缺页速率。读取其它进程的内存需要 root，
+  请用 `sudo` 运行 sgrud。
 
 ## 权限
 

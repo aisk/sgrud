@@ -77,6 +77,13 @@ tục hoạt động khi bạn xem các tab khác. Biểu đồ flame mọc từ
 dành cho mỗi thread một khối riêng ở hàng đầu tiên, nên một thread nhàn rỗi
 sẽ hiện thành một cột cao thay vì bị trộn lẫn với các thread khác.
 
+Tab GC cho thấy tỷ lệ thời gian dành cho thu gom, số lần thu gom mỗi giây, số
+đối tượng đang được theo dõi và lịch sử các lần thu gom. Tiến trình đích chỉ
+giữ 11 lần thu gom thế hệ trẻ và 3 lần thế hệ già gần nhất, nên monitor tích
+lũy mọi bản ghi nó từng thấy. Khi sampler đang chạy, tab này còn nêu tên các
+hàm đã kích hoạt thu gom, tức là nơi cấp phát dồn dập nhất. Tab Process tách
+bộ nhớ chi tiết đến mức nền tảng cho phép, xem [Nền tảng](#nền-tảng).
+
 ![Tab Tasks, hiển thị cây task asyncio cùng thứ mỗi task đang chờ](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
 
 *Tab Tasks: các task asyncio dưới dạng cây, mỗi task kèm các frame coroutine nó đang dừng.*
@@ -115,7 +122,8 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(t.tid, t.name, t.status.describe(), t.cpu_percent, t.frames[:1])
     for task in snap.tasks:
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
-    print(snap.gc[0].collections, snap.gc[0].history[:1])
+    print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
+    print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
     print(snap.to_dict())  # JSON friendly
 ```
 
@@ -144,14 +152,18 @@ Stack, task asyncio, GC và profiler đều lấy từ `_remote_debugging` và h
 thông qua psutil, và đó là chỗ các nền tảng khác nhau.
 
 - **Linux** báo cáo mọi thứ, kể cả trạng thái lập lịch của từng thread, thứ
-  dùng để đánh dấu thread đang chạy trên CPU ở chế độ wall.
+  đánh dấu một thread đang trên CPU ở chế độ wall, và bức tranh bộ nhớ đầy đủ:
+  phần ẩn danh và phần ánh xạ tệp của rss, USS và PSS, heap brk và các ánh xạ
+  ẩn danh, huge page trong suốt, tốc độ lỗi trang, giới hạn bộ nhớ cgroup và
+  điểm OOM.
 - **Windows** có tên thread và thời gian CPU của từng thread nhưng không có
   trạng thái lập lịch, nên ở chế độ wall thread hiện `?` thay vì `cpu` /
-  `idle`. Không báo cáo swap và bộ nhớ dùng chung.
+  `idle`. Bộ nhớ gồm `rss`, `vms`, working set đỉnh, private bytes, USS và tốc
+  độ lỗi trang.
 - **macOS** không thể khớp thread của hệ điều hành với id thread của trình
-  thông dịch, nên thread hiện không có tên và số liệu CPU, còn bộ nhớ chỉ có
-  `rss` / `vms`. Đọc bộ nhớ của tiến trình khác cần root, vì vậy hãy chạy
-  sgrud với `sudo`.
+  thông dịch, nên thread hiện ra không có tên hay số liệu CPU. Bộ nhớ gồm
+  `rss`, `vms`, USS và tốc độ lỗi trang. Đọc bộ nhớ của tiến trình khác cần
+  root, hãy chạy sgrud với `sudo`.
 
 ## Quyền hạn
 

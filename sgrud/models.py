@@ -113,17 +113,35 @@ class Task:
 
 @dataclass(frozen=True, slots=True)
 class GCCollection:
-    """One garbage collection recorded in the target's GC history ring."""
+    """One garbage collection of a generation.
+
+    ``collected``, ``uncollectable`` and ``candidates`` are -1 and
+    ``duration`` is NaN when the previous collection of the generation was
+    never observed, since the target only keeps cumulative counters.
+    """
 
     generation: int
     interpreter_id: int
+    #: Ordinal of the collection within its generation, 1 for the first.
+    index: int
+    #: Raw ``time.perf_counter_ns()`` readings on the target's clock.
     started_at: int
     stopped_at: int
     duration: float
     collected: int
     uncollectable: int
     candidates: int
+    #: Objects tracked by the GC when the collection started.
     heap_size: int
+    #: Seconds between the end of the collection and the snapshot.
+    age: float = float("nan")
+
+    @property
+    def survivors(self) -> int:
+        """Candidates that survived the collection, -1 when unknown."""
+        if self.candidates < 0 or self.collected < 0:
+            return -1
+        return self.candidates - self.collected
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,26 +151,82 @@ class GCGeneration:
     collected: int
     uncollectable: int
     total_duration: float
+    #: Objects tracked by the GC when the last collection started.
     heap_size: int
-    #: Most recent first.
+    #: Collections per second since the previous snapshot, ``None`` for the
+    #: first snapshot of a monitor.
+    rate: float | None = None
+    #: Fraction of wall time the target spent in collections of this
+    #: generation since the previous snapshot, ``None`` for the first.
+    time_share: float | None = None
+    #: Most recent first. A monitor accumulates this across snapshots, so
+    #: it can reach back further than the target's own history ring.
     history: tuple[GCCollection, ...] = ()
+
+    @property
+    def mean_duration(self) -> float:
+        return self.total_duration / self.collections if self.collections else 0.0
 
 
 @dataclass(frozen=True, slots=True)
 class Memory:
     """Process memory figures in bytes.
 
-    Fields the platform does not report are 0: macOS has only ``rss`` and
-    ``vms``, Windows lacks ``swap`` and ``shared``. On Windows ``vms`` is
-    the commit charge, which can be smaller than ``rss``.
+    Fields the platform does not report are 0. Linux reports everything.
+    macOS has ``rss``, ``vms`` and ``uss``. Windows has those plus ``hwm``
+    and ``data`` (private bytes), and its ``vms`` is the commit charge,
+    which can be smaller than ``rss``.
     """
 
     rss: int
     vms: int
+    #: Peak RSS.
     hwm: int
     swap: int
     data: int
     shared: int
+    #: Unique set size: pages no other process maps. What the process
+    #: would give back if it exited.
+    uss: int = 0
+    #: Proportional set size: rss with shared pages split between sharers.
+    pss: int = 0
+    #: Parts of rss: anonymous memory (the allocators), file mappings
+    #: (the interpreter binary, extension modules) and shared memory.
+    anon: int = 0
+    file: int = 0
+    shmem: int = 0
+    #: The brk heap, where glibc malloc puts small blocks. Python objects
+    #: over 512 bytes and raw allocations land here.
+    brk: int = 0
+    #: Anonymous private mappings outside the brk heap and the main stack:
+    #: pymalloc arenas, large mallocs and thread stacks.
+    anon_mapped: int = 0
+    #: Anonymous memory backed by transparent huge pages.
+    huge: int = 0
+    #: Peak virtual size.
+    peak_vms: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryLimits:
+    """Ceilings the process runs under. 0 where there is none or the platform does not say."""
+
+    #: cgroup memory limit, throttle threshold and current usage, in
+    #: bytes. Linux only, and only when the process is in a cgroup that
+    #: sets them, which is what containers do.
+    cgroup_limit: int = 0
+    cgroup_high: int = 0
+    cgroup_usage: int = 0
+    #: ``RLIMIT_AS``, the address space ceiling. Linux only.
+    address_space: int = 0
+    #: The kernel's OOM killer score, -1 when unknown. Linux only.
+    oom_score: int = -1
+
+    @property
+    def cgroup_percent(self) -> float | None:
+        if self.cgroup_limit <= 0:
+            return None
+        return 100.0 * self.cgroup_usage / self.cgroup_limit
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +243,17 @@ class Process:
     uptime: float
     #: CPU usage since the previous snapshot in percent of one core.
     cpu_percent: float | None
+    #: Page faults since the process started. Major faults (those that
+    #: had to read from disk) are counted in both figures. Windows reports
+    #: no major faults separately.
+    page_faults: int = 0
+    major_faults: int = 0
+    #: Faults per second since the previous snapshot, ``None`` for the
+    #: first snapshot. Minor faults are the allocators touching new pages,
+    #: so this moves before rss does.
+    fault_rate: float | None = None
+    major_fault_rate: float | None = None
+    limits: MemoryLimits = MemoryLimits()
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +279,25 @@ class Snapshot:
             if t.id == task_id:
                 return t
         return None
+
+    @property
+    def collecting(self) -> tuple[Thread, ...]:
+        """Threads that are inside a garbage collection right now."""
+        return tuple(
+            t for t in self.threads if any(f.synthetic and f.funcname == "<GC>" for f in t.frames)
+        )
+
+    @property
+    def gc_time_share(self) -> float | None:
+        """Fraction of wall time spent in the GC since the previous snapshot."""
+        shares = [g.time_share for g in self.gc if g.time_share is not None]
+        return sum(shares) if shares else None
+
+    @property
+    def gc_rate(self) -> float | None:
+        """Collections per second, all generations, since the previous snapshot."""
+        rates = [g.rate for g in self.gc if g.rate is not None]
+        return sum(rates) if rates else None
 
     def task_children(self) -> dict[int | None, list[Task]]:
         """Map parent task id (``None`` for roots) to its child tasks."""

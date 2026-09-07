@@ -77,6 +77,12 @@ sgrud profile PID --folded          flamegraph.pl や speedscope 向けの折り
 行で各スレッドに独自のブロックを割り当てるため、アイドル状態のスレッドは他の
 スレッドに混ざることなく、高い柱として表示されます。
 
+GC タブには、回収に費やした時間の割合、毎秒の回収回数、追跡中のオブジェクト数、
+回収の履歴が表示されます。対象プロセス自身は直近の若い世代 11 回と古い世代 3 回しか保持しないため、
+monitor が見たレコードをすべて蓄積します。サンプラーが動いている間は、回収のきっかけになった関数、
+つまり割り当てが集中している場所も表示します。Process タブはプラットフォームが許す限りメモリを分解して表示します。
+[プラットフォーム](#プラットフォーム)を参照してください。
+
 ![Tasks タブ。asyncio タスクのツリーと各タスクが待機している対象を表示](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
 
 *Tasks タブ：asyncio タスクのツリー。各タスクが停止しているコルーチンフレーム付き。*
@@ -114,7 +120,8 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(t.tid, t.name, t.status.describe(), t.cpu_percent, t.frames[:1])
     for task in snap.tasks:
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
-    print(snap.gc[0].collections, snap.gc[0].history[:1])
+    print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
+    print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
     print(snap.to_dict())  # JSON friendly
 ```
 
@@ -142,15 +149,18 @@ print("\n".join(sampler.hotspots.folded()))  # flamegraph.pl input
 するため、どこでも同じように動作します。プロセスとスレッドの計測は psutil を
 通じて OS から取得しており、プラットフォームごとの違いはここにあります。
 
-- **Linux** はスレッドごとのスケジューラ状態を含むすべてを報告します。wall
-  モードでスレッドが CPU 上にあるかどうかを示すのはこの状態です。
-- **Windows** にはスレッド名とスレッドごとの CPU 時間がありますが、スケジューラ
-  状態はありません。そのため wall モードではスレッドが `cpu` / `idle` ではなく
-  `?` と表示されます。swap と共有メモリは報告されません。
-- **macOS** では OS のスレッドをインタープリタのスレッド ID と対応付けられない
-  ため、スレッドは名前と CPU の数値なしで表示され、メモリは `rss` / `vms` のみ
-  です。他のプロセスのメモリを読むには root が必要なので、sgrud は `sudo` で
-  実行してください。
+- **Linux** はスレッドごとのスケジューラ状態を含むすべてを報告します。
+  wall モードでスレッドが CPU 上にあると判定するのはこれによります。
+  メモリも完全で、rss の匿名部分とファイル部分、USS と PSS、brk ヒープと匿名マッピング、
+  透過的ヒュージページ、ページフォルト率、cgroup のメモリ上限、OOM スコアが得られます。
+- **Windows** にはスレッド名とスレッドごとの CPU 時間がありますが、
+  スケジューラ状態がないため、wall モードではスレッドが `cpu` / `idle` ではなく `?` と表示されます。
+  メモリは `rss`、`vms`、ワーキングセットのピーク、プライベートバイト、
+  USS、ページフォルト率です。
+- **macOS** では OS のスレッドをインタープリタのスレッド ID と対応付けられないため、
+  スレッドに名前も CPU の数値も付きません。メモリは `rss`、`vms`、
+  USS、ページフォルト率です。他プロセスのメモリを読むには root が必要なので、
+  sgrud を `sudo` で実行してください。
 
 ## 権限
 

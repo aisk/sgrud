@@ -8,6 +8,7 @@ only, so the UI can be driven by recorded snapshots in tests.
 
 from __future__ import annotations
 
+import math
 import os
 import zlib
 from collections import deque
@@ -38,8 +39,16 @@ from textual.widgets import (
 )
 
 from .errors import ProcessExited, SgrudError
-from .format import human_bytes, human_duration, percent, short_path
-from .models import Snapshot, Task, Thread, ThreadStatus
+from .format import (
+    human_bytes,
+    human_count,
+    human_duration,
+    human_rate,
+    memory_rows,
+    percent,
+    short_path,
+)
+from .models import GCCollection, Snapshot, Task, Thread, ThreadStatus
 from .monitor import Monitor
 from .profile import MODES, CallNode, Hotspots
 from .sampler import Sampler
@@ -62,6 +71,15 @@ def _status_text(status: ThreadStatus) -> Text:
     else:
         style = "dim"
     return Text(label, style=style)
+
+
+def _latest_collection(snap: Snapshot) -> GCCollection | None:
+    """The most recent collection of any generation."""
+    latest = None
+    for g in snap.gc:
+        if g.history and (latest is None or g.history[0].stopped_at > latest.stopped_at):
+            latest = g.history[0]
+    return latest
 
 
 def _top_frame(frames) -> str:
@@ -92,7 +110,10 @@ class Summary(Static):
         text.append(f"  vms {human_bytes(m.vms)}")
         text.append(f"  threads {p.num_threads}")
         text.append(f"  tasks {len(snap.tasks)}")
-        if snap.gc:
+        share = snap.gc_time_share
+        if share is not None:
+            text.append(f"  gc {share * 100:.1f}%", "bold red" if snap.collecting else "")
+        elif snap.gc:
             text.append(f"  gc0 {snap.gc[0].collections}")
         text.append(f"  every {interval:g}s")
         if exited is not None:
@@ -390,7 +411,9 @@ class SgrudApp(App[int]):
     .stack { width: 2fr; border-left: solid $secondary; padding: 0 1; }
     DataTable { height: 1fr; }
     Tree { height: 1fr; }
-    #memhist, #cpuhist { height: 3; }
+    #memhist, #cpuhist, #faulthist, #heaphist, #gchist { height: 3; }
+    #gc-info { height: 2; padding: 0 1; }
+    #gc-table { height: auto; }
     #hot-bar, #flame-bar { height: 3; }
     #hot-filter, #flame-filter { width: 40; }
     #hot-info, #flame-info { padding: 1 2; color: $text-muted; }
@@ -463,6 +486,9 @@ class SgrudApp(App[int]):
         self.snapshot: Snapshot | None = None
         self.rss_history: deque[int] = deque(maxlen=HISTORY)
         self.cpu_history: deque[float] = deque(maxlen=HISTORY)
+        self.fault_history: deque[float] = deque(maxlen=HISTORY)
+        self.heap_history: deque[int] = deque(maxlen=HISTORY)
+        self.gc_history: deque[float] = deque(maxlen=HISTORY)
         self._timer = None
         self._selected_tid: int | None = None
         self._selected_task: int | None = None
@@ -496,6 +522,11 @@ class SgrudApp(App[int]):
                         yield Tree("asyncio", id="tasks-tree")
                     yield StackPanel("", id="task-stack", classes="stack")
             with TabPane("GC", id="gc"):
+                yield Static("", id="gc-info")
+                yield Label("tracked objects", classes="hist-label")
+                yield Sparkline([], id="heaphist")
+                yield Label("time in gc %", classes="hist-label")
+                yield Sparkline([], id="gchist")
                 yield DataTable(id="gc-table", cursor_type="row")
                 history = DataTable(id="gc-history", cursor_type="none")
                 history.can_focus = False
@@ -505,6 +536,8 @@ class SgrudApp(App[int]):
                 yield Sparkline([], id="memhist")
                 yield Label("cpu %", classes="hist-label")
                 yield Sparkline([], id="cpuhist")
+                yield Label("page faults /s", classes="hist-label")
+                yield Sparkline([], id="faulthist")
                 yield Static("", id="procinfo")
             with TabPane("Hotspots", id="hotspots"):
                 with Horizontal(id="hot-bar"):
@@ -528,9 +561,11 @@ class SgrudApp(App[int]):
         table = self.query_one("#threads-table", DataTable)
         table.add_columns("tid", "name", "status", "st", "cpu%", "utime", "where")
         gc = self.query_one("#gc-table", DataTable)
-        gc.add_columns("gen", "collections", "collected", "uncollectable", "total time", "heap")
+        gc.add_columns(
+            "gen", "collections", "rate", "time%", "mean", "collected", "uncollectable", "objects"
+        )
         hist = self.query_one("#gc-history", DataTable)
-        hist.add_columns("gen", "duration", "collected", "candidates", "heap")
+        hist.add_columns("gen", "#", "ago", "duration", "collected", "survivors", "objects")
         hot = self.query_one("#hot-table", DataTable)
         hot.add_columns("self%", "total%", "self", "total", "function", "file")
         self.query_one("#flame-scroll", VerticalScroll).anchor()
@@ -689,6 +724,13 @@ class SgrudApp(App[int]):
         self.rss_history.append(snap.process.memory.rss)
         if snap.process.cpu_percent is not None:
             self.cpu_history.append(snap.process.cpu_percent)
+        if snap.process.fault_rate is not None:
+            self.fault_history.append(snap.process.fault_rate)
+        latest = _latest_collection(snap)
+        if latest is not None:
+            self.heap_history.append(latest.heap_size)
+        if snap.gc_time_share is not None:
+            self.gc_history.append(snap.gc_time_share * 100)
         self._update_summary()
         self._update_threads(snap)
         self._update_tasks(snap)
@@ -799,6 +841,9 @@ class SgrudApp(App[int]):
             self._show_task(self.snapshot.task(self._selected_task))
 
     def _update_gc(self, snap: Snapshot) -> None:
+        self.query_one("#heaphist", Sparkline).data = list(self.heap_history)
+        self.query_one("#gchist", Sparkline).data = list(self.gc_history)
+        self.query_one("#gc-info", Static).update(self._gc_info(snap))
         table = self.query_one("#gc-table", DataTable)
         table.clear()
         hist = self.query_one("#gc-history", DataTable)
@@ -807,42 +852,73 @@ class SgrudApp(App[int]):
             table.add_row(
                 str(g.generation),
                 str(g.collections),
+                human_rate(g.rate),
+                "-" if g.time_share is None else f"{g.time_share * 100:.2f}",
+                human_duration(g.mean_duration),
                 str(g.collected),
                 str(g.uncollectable),
-                human_duration(g.total_duration),
-                str(g.heap_size),
+                human_count(g.heap_size),
             )
         rows = sorted(
             (c for g in snap.gc for c in g.history), key=lambda c: c.stopped_at, reverse=True
         )
-        for c in rows[:20]:
+        for c in rows[:50]:
             hist.add_row(
                 str(c.generation),
+                str(c.index),
+                "?" if math.isnan(c.age) else human_duration(max(c.age, 0.0)),
                 human_duration(c.duration),
-                "?" if c.collected < 0 else str(c.collected),
-                "?" if c.candidates < 0 else str(c.candidates),
-                str(c.heap_size),
+                human_count(c.collected),
+                human_count(c.survivors),
+                human_count(c.heap_size),
             )
+
+    def _gc_info(self, snap: Snapshot) -> Text:
+        info = Text(no_wrap=True, overflow="ellipsis")
+        share = snap.gc_time_share
+        if share is None:
+            info.append("waiting for a second snapshot", "dim")
+        else:
+            info.append(f"time in gc {share * 100:.2f}%", "bold")
+            info.append(f"  {human_rate(snap.gc_rate)} collections")
+        latest = _latest_collection(snap)
+        if latest is not None:
+            info.append(f"  {human_count(latest.heap_size)} tracked objects")
+            anon = snap.process.memory.anon or snap.process.memory.uss
+            if anon and latest.heap_size:
+                info.append(f"  {human_bytes(anon // latest.heap_size)} anon per object")
+        for t in snap.collecting:
+            info.append(f"  COLLECTING in {t.name or t.tid}", "bold red")
+        info.append("\n")
+        if self.sampler is None:
+            info.append("trigger sites need the sampler (--rate)", "dim")
+        else:
+            gc_samples, samples, sites = self.hotspots.gc_sites(limit=4)
+            if not samples:
+                info.append("waiting for samples", "dim")
+            else:
+                info.append(f"in gc {100 * gc_samples / samples:.1f}% of {samples} samples")
+                if sites:
+                    info.append("  triggered from ", "dim")
+                    info.append(", ".join(f"{site.funcname} {site.percent:.1f}%" for site in sites))
+        return info
 
     def _update_process(self, snap: Snapshot) -> None:
         self.query_one("#memhist", Sparkline).data = list(self.rss_history)
         self.query_one("#cpuhist", Sparkline).data = list(self.cpu_history)
+        self.query_one("#faulthist", Sparkline).data = list(self.fault_history)
         p = snap.process
-        m = p.memory
-        info = "\n".join(
-            [
-                f"exe      {p.exe}",
-                f"cmdline  {' '.join(p.cmdline)}",
-                f"state    {p.state}    uptime {human_duration(p.uptime)}",
-                f"cpu      {percent(p.cpu_percent).strip()}%"
-                f"   user {p.user_time:.2f}s   sys {p.system_time:.2f}s",
-                f"rss      {human_bytes(m.rss)}   peak {human_bytes(m.hwm)}",
-                f"vms      {human_bytes(m.vms)}   data {human_bytes(m.data)}",
-                f"shared   {human_bytes(m.shared)}   swap {human_bytes(m.swap)}",
-                f"threads  {p.num_threads}",
-            ]
-        )
-        self.query_one("#procinfo", Static).update(info)
+        lines = [
+            f"exe      {p.exe}",
+            f"cmdline  {' '.join(p.cmdline)}",
+            f"state    {p.state}    uptime {human_duration(p.uptime)}    threads {p.num_threads}",
+            f"cpu      {percent(p.cpu_percent).strip()}%"
+            f"   user {p.user_time:.2f}s   sys {p.system_time:.2f}s",
+        ]
+        for label, pairs in memory_rows(p):
+            cells = [f"{name} {value}".strip() for name, value in pairs]
+            lines.append(f"{label:<8} " + "   ".join(cells))
+        self.query_one("#procinfo", Static).update("\n".join(lines))
 
     def _sync_thread_filters(self, snap: Snapshot) -> None:
         tids = tuple(t.tid for t in snap.threads)

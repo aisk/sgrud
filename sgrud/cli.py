@@ -146,8 +146,9 @@ def _dump(args: argparse.Namespace) -> int:
     try:
         with monitor:
             if args.interval is None:
-                # A second sample a moment later gives meaningful CPU percentages.
-                monitor.snapshot(stacks=False, tasks=False, gc=False)
+                # A second sample a moment later gives meaningful CPU, page
+                # fault and GC rates.
+                monitor.snapshot(stacks=False, tasks=False, gc=sections["gc"])
                 time.sleep(0.1)
                 snaps = iter([monitor.snapshot(**sections)])
             else:

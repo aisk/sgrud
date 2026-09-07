@@ -77,6 +77,14 @@ running while you look at other tabs. The flame graph grows from the bottom
 and gives each thread its own block on the first row, so an idle thread
 shows up as a tall column instead of being mixed into the others.
 
+The GC tab shows the share of wall time spent collecting, collections per
+second, the number of tracked objects and a history of collections. The target
+only keeps its last 11 young and 3 old collections, so the monitor accumulates
+every record it has seen. While the sampler runs the tab also names the
+functions collections were triggered from, which is where the allocation churn
+is. The Process tab breaks memory down as far as the platform allows, see
+[Platforms](#platforms).
+
 ![The Tasks tab, showing the asyncio task tree with what each task is awaiting](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
 
 *The Tasks tab: asyncio tasks as a tree, each with the coroutine frames it is parked in.*
@@ -116,7 +124,8 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(t.tid, t.name, t.status.describe(), t.cpu_percent, t.frames[:1])
     for task in snap.tasks:
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
-    print(snap.gc[0].collections, snap.gc[0].history[:1])
+    print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
+    print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
     print(snap.to_dict())  # JSON friendly
 ```
 
@@ -144,15 +153,19 @@ Stacks, asyncio tasks, GC and the profiler come from `_remote_debugging`
 and behave the same everywhere. Process and thread accounting comes from
 the OS through psutil, and that is where the platforms differ.
 
-- **Linux** reports everything, including per-thread scheduler state,
-  which is what marks a thread as on CPU in wall mode.
-- **Windows** has thread names and per-thread CPU time but no scheduler
-  state, so threads read as `?` instead of `cpu` / `idle` in wall mode.
-  Swap and shared memory are not reported.
+- **Linux** reports everything, including per-thread scheduler state, which is
+  what marks a thread as on CPU in wall mode, and the full memory picture: the
+  anonymous and file backed parts of rss, USS and PSS, the brk heap and
+  anonymous mappings, transparent huge pages, page fault rates, the cgroup
+  memory limit and the OOM score.
+- **Windows** has thread names and per-thread CPU time but no scheduler state,
+  so threads read as `?` instead of `cpu` / `idle` in wall mode. Memory is
+  `rss`, `vms`, the peak working set, private bytes, USS and the page fault
+  rate.
 - **macOS** cannot match OS threads to the interpreter's thread ids, so
-  threads show without names or CPU figures and only `rss` / `vms` are
-  reported for memory. Reading another process's memory needs root, so
-  run sgrud with `sudo`.
+  threads show without names or CPU figures. Memory is `rss`, `vms`, USS and
+  the page fault rate. Reading another process's memory needs root, so run
+  sgrud with `sudo`.
 
 ## Permissions
 

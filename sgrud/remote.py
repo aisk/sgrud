@@ -10,7 +10,9 @@ Requires the 3.15 API (thread status flags, GC stats, native frames).
 from __future__ import annotations
 
 import sys
-from collections.abc import Iterable
+import time
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from . import osproc
@@ -283,8 +285,8 @@ class RemoteInspector:
                 )
         return tuple(tasks)
 
-    def gc(self) -> tuple[GCGeneration, ...]:
-        """Per-generation GC totals plus the recent collection history."""
+    def gc_records(self) -> tuple[GCRecord, ...]:
+        """The raw contents of the target's GC history rings, empty slots dropped."""
         if self._gc_error is not None:
             raise RuntimeError(self._gc_error)
         if self._gc_monitor is None:
@@ -297,7 +299,26 @@ class RemoteInspector:
             raw = self._gc_monitor.get_gc_stats()
         except Exception as e:
             raise self._guard(e) from e
-        return _convert_gc(raw)
+        return tuple(
+            GCRecord(
+                generation=item.gen,
+                interpreter_id=item.iid,
+                index=item.collections,
+                started_at=item.ts_start,
+                stopped_at=item.ts_stop,
+                collected=item.collected,
+                uncollectable=item.uncollectable,
+                candidates=item.candidates,
+                duration=item.duration,
+                heap_size=item.heap_size,
+            )
+            for item in raw
+            if item.collections > 0
+        )
+
+    def gc(self) -> tuple[GCGeneration, ...]:
+        """Per-generation GC totals plus the recent collection history."""
+        return build_gc(self.gc_records(), now_ns=time.perf_counter_ns())
 
     def pause(self) -> None:
         self._live().pause_threads()
@@ -315,8 +336,99 @@ class RemoteInspector:
         self._gc_monitor = None
 
 
+@dataclass(frozen=True, slots=True)
+class GCRecord:
+    """One slot of a GC history ring: cumulative counters after collection ``index``.
+
+    ``collected``, ``uncollectable``, ``candidates`` and ``duration`` are
+    running totals for the generation. ``heap_size`` is the number of
+    tracked objects when the collection started.
+    """
+
+    generation: int
+    interpreter_id: int
+    index: int
+    started_at: int
+    stopped_at: int
+    collected: int
+    uncollectable: int
+    candidates: int
+    duration: float
+    heap_size: int
+
+
+NUM_GENERATIONS = 3
+
+
+def build_gc(
+    records: Iterable[GCRecord],
+    *,
+    now_ns: int | None = None,
+    limit: int | None = None,
+    rates: Mapping[int, tuple[float | None, float | None]] | None = None,
+) -> tuple[GCGeneration, ...]:
+    """Turn ring records into per-generation totals and a history of deltas.
+
+    Records may span several reads of the ring. Each collection's own
+    figures are the difference to the record before it, so a gap (the ring
+    wrapped between reads) leaves that collection's figures unknown. The
+    first collection of a generation needs no predecessor.
+
+    ``now_ns`` is a ``time.perf_counter_ns()`` reading used to fill in each
+    collection's ``age``. ``rates`` maps generation to ``(rate, time_share)``.
+    """
+    by_gen: dict[int, dict[int, GCRecord]] = {g: {} for g in range(NUM_GENERATIONS)}
+    for r in records:
+        by_gen.setdefault(r.generation, {})[r.index] = r
+    gens: list[GCGeneration] = []
+    for gen, slots in sorted(by_gen.items()):
+        rate, share = (rates or {}).get(gen, (None, None))
+        if not slots:
+            gens.append(GCGeneration(gen, 0, 0, 0, 0.0, 0, rate, share))
+            continue
+        history: list[GCCollection] = []
+        for index in sorted(slots, reverse=True):
+            if limit is not None and len(history) >= limit:
+                break
+            cur = slots[index]
+            base: GCRecord | _ZeroStats | None
+            if index == 1:
+                base = _ZERO_STATS
+            else:
+                base = slots.get(index - 1)
+            history.append(
+                GCCollection(
+                    generation=gen,
+                    interpreter_id=cur.interpreter_id,
+                    index=index,
+                    started_at=cur.started_at,
+                    stopped_at=cur.stopped_at,
+                    duration=cur.duration - base.duration if base else float("nan"),
+                    collected=cur.collected - base.collected if base else -1,
+                    uncollectable=cur.uncollectable - base.uncollectable if base else -1,
+                    candidates=cur.candidates - base.candidates if base else -1,
+                    heap_size=cur.heap_size,
+                    age=(now_ns - cur.stopped_at) / 1e9 if now_ns is not None else float("nan"),
+                )
+            )
+        latest = slots[max(slots)]
+        gens.append(
+            GCGeneration(
+                generation=gen,
+                collections=latest.index,
+                collected=latest.collected,
+                uncollectable=latest.uncollectable,
+                total_duration=latest.duration,
+                heap_size=latest.heap_size,
+                rate=rate,
+                time_share=share,
+                history=tuple(history),
+            )
+        )
+    return tuple(gens)
+
+
 class _ZeroStats:
-    collections = 0
     collected = 0
     uncollectable = 0
     candidates = 0
@@ -324,55 +436,3 @@ class _ZeroStats:
 
 
 _ZERO_STATS = _ZeroStats()
-
-
-def _convert_gc(raw: Iterable[Any]) -> tuple[GCGeneration, ...]:
-    by_gen: dict[int, list[Any]] = {}
-    for item in raw:
-        by_gen.setdefault(item.gen, []).append(item)
-    gens: list[GCGeneration] = []
-    for gen, items in sorted(by_gen.items()):
-        # The target keeps a ring buffer per generation whose counters are
-        # cumulative. Empty slots have collections == 0. Sorting by the
-        # cumulative counter recovers chronological order.
-        used = sorted((i for i in items if i.collections > 0), key=lambda i: i.collections)
-        if not used:
-            gens.append(GCGeneration(gen, 0, 0, 0, 0.0, 0))
-            continue
-        latest = used[-1]
-        history: list[GCCollection] = []
-        prev = None
-        for cur in used:
-            if cur.collections == 1:
-                base = _ZERO_STATS
-            elif prev is not None and prev.collections == cur.collections - 1:
-                base = prev
-            else:
-                base = None  # gap in the ring, per-collection deltas unknown
-            history.append(
-                GCCollection(
-                    generation=gen,
-                    interpreter_id=cur.iid,
-                    started_at=cur.ts_start,
-                    stopped_at=cur.ts_stop,
-                    duration=cur.duration - base.duration if base else float("nan"),
-                    collected=cur.collected - base.collected if base else -1,
-                    uncollectable=cur.uncollectable - base.uncollectable if base else -1,
-                    candidates=cur.candidates - base.candidates if base else -1,
-                    heap_size=cur.heap_size,
-                )
-            )
-            prev = cur
-        history.reverse()
-        gens.append(
-            GCGeneration(
-                generation=gen,
-                collections=latest.collections,
-                collected=latest.collected,
-                uncollectable=latest.uncollectable,
-                total_duration=latest.duration,
-                heap_size=latest.heap_size,
-                history=tuple(history),
-            )
-        )
-    return tuple(gens)
