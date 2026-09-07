@@ -117,7 +117,11 @@ liệt kê các tiến trình con của mục tiêu cùng CPU và bộ nhớ c�
 dấu những tiến trình là trình thông dịch Python, nên một pool
 `multiprocessing` hay một worker do supervisor khởi động chỉ cần liếc qua là
 thấy. Có thể kiểm tra bất kỳ tiến trình nào trong số đó bằng một `sgrud PID`
-thứ hai.
+thứ hai. Trên Linux tab này còn cho thấy cgroup mà mục tiêu đang chạy trong
+đó, chẳng hạn cgroup của container: hạn mức CPU và tỷ lệ chu kỳ bị bóp
+băng thông, số lần OOM kill, giới hạn pid (thread cũng được tính vào đó),
+bên cạnh số CPU mà tiến trình được phép chạy. Mọi con số của cgroup là của
+cả cgroup, không riêng mục tiêu.
 
 Tab IPC dành cho tiến trình bị treo: nó liệt kê mọi descriptor mà tiến trình
 đích đang mở, gồm pipe, socket kèm địa chỉ và trạng thái, bộ nhớ chia sẻ,
@@ -185,6 +189,7 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
     print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
+    print(snap.process.cgroup.cpu_quota, snap.process.cgroup.throttled_percent, snap.process.cgroup.oom_kills)
     print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.to_dict())  # JSON friendly
     result = m.probe(types=5)  # runs code in the target, see Probing
@@ -223,7 +228,8 @@ thông qua psutil, và đó là chỗ các nền tảng khác nhau.
   đánh dấu một thread đang trên CPU ở chế độ wall, và bức tranh bộ nhớ đầy đủ:
   phần ẩn danh và phần ánh xạ tệp của rss, USS và PSS, heap brk và các ánh xạ
   ẩn danh, huge page trong suốt, tốc độ lỗi trang, giới hạn bộ nhớ cgroup và
-  điểm OOM. Đây cũng là nền tảng duy nhất có bức tranh IPC đầy đủ: pipe và đầu
+  điểm OOM, và với cgroup v2 cả hạn mức CPU, việc bóp băng thông, số lần OOM
+  kill và giới hạn pid của cgroup. Đây cũng là nền tảng duy nhất có bức tranh IPC đầy đủ: pipe và đầu
   bên kia của chúng, bộ nhớ chia sẻ, khóa tệp và system call mà mỗi thread
   đang bị chặn (cần cùng quyền như đọc bộ nhớ, và bảng số hiệu mà sgrud có chỉ
   gồm x86_64, aarch64, riscv64 và loongarch64; nơi khác hiện theo số).

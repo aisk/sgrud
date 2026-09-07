@@ -99,7 +99,7 @@ sgrud probe PID -t 10               추적 중인 객체를 타입별로 세어 
 동작합니다. 플레임 그래프는 아래에서 위로 자라며 첫 번째 행에서 각 스레드에 고유한
 블록을 배정하므로, 유휴 스레드는 다른 스레드와 섞이지 않고 높은 기둥으로 나타납니다.
 
-GC 탭은 수집에 쓴 시간의 비율, 초당 수집 횟수, 추적 중인 객체 수, 수집 이력을 보여줍니다. 대상 프로세스는 최근 젊은 세대 11회와 오래된 세대 3회만 보관하므로 monitor가 본 기록을 모두 누적합니다. 샘플러가 돌고 있으면 수집을 유발한 함수, 즉 할당이 몰리는 곳도 표시합니다. Process 탭은 플랫폼이 허용하는 만큼 메모리를 나누어 보여줍니다. [플랫폼](#플랫폼)을 참고하세요. 또한 대상의 자식 프로세스를 CPU와 메모리와 함께 나열하고 Python 인터프리터인 것을 표시하므로, `multiprocessing` 풀이나 슈퍼바이저가 띄운 워커를 한눈에 볼 수 있습니다. 그중 어느 것이든 별도의 `sgrud PID`로 검사할 수 있습니다.
+GC 탭은 수집에 쓴 시간의 비율, 초당 수집 횟수, 추적 중인 객체 수, 수집 이력을 보여줍니다. 대상 프로세스는 최근 젊은 세대 11회와 오래된 세대 3회만 보관하므로 monitor가 본 기록을 모두 누적합니다. 샘플러가 돌고 있으면 수집을 유발한 함수, 즉 할당이 몰리는 곳도 표시합니다. Process 탭은 플랫폼이 허용하는 만큼 메모리를 나누어 보여줍니다. [플랫폼](#플랫폼)을 참고하세요. 또한 대상의 자식 프로세스를 CPU와 메모리와 함께 나열하고 Python 인터프리터인 것을 표시하므로, `multiprocessing` 풀이나 슈퍼바이저가 띄운 워커를 한눈에 볼 수 있습니다. 그중 어느 것이든 별도의 `sgrud PID`로 검사할 수 있습니다. Linux에서는 대상이 속한 cgroup, 예를 들어 컨테이너의 cgroup도 보여줍니다. CPU 할당량과 스로틀된 주기의 비율, OOM kill 횟수, pid 한도(스레드도 여기에 포함됩니다)와 함께 프로세스가 실행될 수 있는 CPU 수를 표시합니다. cgroup 수치는 모두 cgroup 전체의 것이며 대상 프로세스만의 것이 아닙니다.
 
 IPC 탭은 멈춘 프로세스를 위한 것입니다. 대상이 열어 둔 모든 디스크립터, 즉 파이프, 주소와 상태가 붙은 소켓, 공유 메모리, 파일을 나열하고, 각 파이프의 반대쪽 끝을 대상의 부모와 자식 중 누가 쥐고 있는지 보여줍니다. 표 위에는 한도 대비 디스크립터 수, 매핑된 공유 메모리 세그먼트와 `multiprocessing` 세마포어, 대상이 잡고 있는 파일 잠금, 그리고 빨간색으로 기다리는 중인 잠금과 그것을 쥔 pid가 표시됩니다. Linux에서는 Threads 탭에 잠든 스레드가 멈춰 있는 시스템 호출과 디스크립터, 예를 들어 `read(fd 4)`가 추가되고 IPC 표에서도 그 디스크립터 옆에 스레드 이름이 나옵니다. 커널이 보고하는 사실만 보여줍니다. `futex` 대기는 락일 수도 GIL일 수도 있으며, 옆의 Python 스택이 어느 쪽인지 알려줍니다.
 
@@ -155,6 +155,7 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
     print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
+    print(snap.process.cgroup.cpu_quota, snap.process.cgroup.throttled_percent, snap.process.cgroup.oom_kills)
     print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.to_dict())  # JSON friendly
     result = m.probe(types=5)  # runs code in the target, see Probing
@@ -189,7 +190,7 @@ print("\n".join(sampler.hotspots.folded()))  # flamegraph.pl input
 같게 동작합니다. 프로세스와 스레드 집계는 psutil을 통해 OS에서 가져오며,
 플랫폼별 차이는 여기에 있습니다.
 
-- **Linux**는 스레드별 스케줄러 상태를 포함해 모든 것을 보고합니다. wall 모드에서 스레드가 CPU 위에 있다고 표시하는 근거가 이것입니다. 메모리도 전부 나오며, rss 중 익명과 파일 매핑의 비중, USS와 PSS, brk 힙과 익명 매핑, 투명 대형 페이지, 페이지 폴트 속도, cgroup 메모리 한도, OOM 점수를 제공합니다. IPC 전체 그림도 Linux에만 있습니다. 파이프와 그 반대쪽 끝, 공유 메모리, 파일 잠금, 각 스레드가 블록된 시스템 호출(메모리 읽기와 같은 권한이 필요하고, sgrud가 가진 호출 번호 표는 x86_64, aarch64, riscv64, loongarch64뿐이라 그 밖에서는 번호로 표시됩니다)입니다.
+- **Linux**는 스레드별 스케줄러 상태를 포함해 모든 것을 보고합니다. wall 모드에서 스레드가 CPU 위에 있다고 표시하는 근거가 이것입니다. 메모리도 전부 나오며, rss 중 익명과 파일 매핑의 비중, USS와 PSS, brk 힙과 익명 매핑, 투명 대형 페이지, 페이지 폴트 속도, cgroup 메모리 한도, OOM 점수를 제공하며, cgroup v2에서는 cgroup의 CPU 할당량, 스로틀링, OOM kill 횟수, pid 한도도 제공합니다. IPC 전체 그림도 Linux에만 있습니다. 파이프와 그 반대쪽 끝, 공유 메모리, 파일 잠금, 각 스레드가 블록된 시스템 호출(메모리 읽기와 같은 권한이 필요하고, sgrud가 가진 호출 번호 표는 x86_64, aarch64, riscv64, loongarch64뿐이라 그 밖에서는 번호로 표시됩니다)입니다.
 - **Windows**는 스레드 이름과 스레드별 CPU 시간은 있지만 스케줄러 상태가 없어서, wall 모드에서 스레드가 `cpu` / `idle` 대신 `?`로 표시됩니다. 메모리는 `rss`, `vms`, 워킹셋 최대치, 프라이빗 바이트, USS, 페이지 폴트 속도입니다. IPC는 핸들 수, 열린 파일과 소켓이며 디스크립터 번호는 없습니다.
 - **macOS**는 OS 스레드를 인터프리터의 스레드 id와 맞출 수 없으므로 스레드에 이름도 CPU 수치도 없습니다. 메모리는 `rss`, `vms`, USS, 페이지 폴트 속도입니다. IPC는 디스크립터 수, 열린 파일과 소켓입니다. 다른 프로세스의 메모리를 읽으려면 root가 필요하니 sgrud를 `sudo`로 실행하세요.
 

@@ -7,8 +7,9 @@ what psutil exposes, so it is platform specific:
 - Linux: one read of ``/proc/<pid>/task/<tid>/stat`` gives CPU times, the
   scheduler state and the thread name. ``/proc/<pid>/status``,
   ``smaps_rollup``, ``maps`` and ``stat`` add the memory breakdown and
-  page faults, and the cgroup files add the container's memory limit.
-  Together those reads cost well under a millisecond.
+  page faults, and the cgroup files add the container's memory limit,
+  CPU quota and throttling, OOM kills and pid limit. Together those reads
+  cost well under a millisecond.
 - Windows: psutil lists threads with CPU times and ``GetThreadDescription``
   adds the name. Windows has no cheap per-thread scheduler state.
 - macOS: psutil numbers threads by index rather than by the id that
@@ -30,7 +31,7 @@ from typing import Any
 import psutil
 
 from .errors import NotSupported
-from .models import IPC, Memory, MemoryLimits
+from .models import IPC, Cgroup, Memory, MemoryLimits
 
 LINUX = sys.platform.startswith("linux")
 MACOS = sys.platform == "darwin"
@@ -83,6 +84,8 @@ class ProcessStat:
     page_faults: int = 0
     major_faults: int = 0
     limits: MemoryLimits = MemoryLimits()
+    cgroup: Cgroup = Cgroup()
+    cpus_allowed: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,9 +188,12 @@ class ProcessStats:
                 cmdline = tuple(_optional(p.cmdline, ()))
         except psutil.NoSuchProcess as e:
             raise ProcessLookupError(self.pid) from e
+        cgroup, cpus_allowed = Cgroup(), 0
         if LINUX:
             memory, faults, major = _linux_memory(self.pid, mem)
             limits = _linux_limits(self.pid, self._proc, self._cgroup)
+            cgroup = _linux_cgroup(self._cgroup)
+            cpus_allowed = _linux_cpus_allowed(self.pid)
         elif WINDOWS:
             memory = Memory(
                 rss=mem.rss,
@@ -215,6 +221,8 @@ class ProcessStats:
             page_faults=faults,
             major_faults=major,
             limits=limits,
+            cgroup=cgroup,
+            cpus_allowed=cpus_allowed,
         )
 
     def _uss_cached(self) -> int:
@@ -450,9 +458,14 @@ def _linux_faults(stat: str) -> tuple[int, int]:
 
 @dataclass(frozen=True, slots=True)
 class _CgroupFiles:
+    #: The cgroup's path as ``/proc/<pid>/cgroup`` spells it.
+    path: str
     limit: str
     high: str
     usage: str
+    #: The cgroup's directory on a v2 hierarchy, where the cpu, memory
+    #: event and pid files live. "" on v1, which keeps them elsewhere.
+    v2: str = ""
 
 
 def _linux_cgroup_files(pid: int) -> _CgroupFiles | None:
@@ -460,9 +473,10 @@ def _linux_cgroup_files(pid: int) -> _CgroupFiles | None:
 
     Handles cgroup v2 (one ``0::/path`` line) and v1 (a line naming the
     ``memory`` controller). Resolved once per process; a process rarely
-    moves between cgroups. Returns None when the files are not visible,
-    which is the case for the root cgroup and for a container watched
-    from outside its cgroup namespace.
+    moves between cgroups. Returns None when the cgroup's directory is
+    not visible, which is the case for a container watched from outside
+    its cgroup namespace. The root cgroup has no limit files, so reading
+    them yields 0 like an unlimited cgroup.
     """
     try:
         text = _read(f"/proc/{pid}/cgroup")
@@ -472,20 +486,107 @@ def _linux_cgroup_files(pid: int) -> _CgroupFiles | None:
         _, _, rest = line.partition(":")
         controllers, _, path = rest.partition(":")
         if controllers == "":
-            base = f"/sys/fs/cgroup{path}"
+            base = "/sys/fs/cgroup" + path.rstrip("/")
             files = _CgroupFiles(
-                f"{base}/memory.max", f"{base}/memory.high", f"{base}/memory.current"
+                path, f"{base}/memory.max", f"{base}/memory.high", f"{base}/memory.current", base
             )
         elif "memory" in controllers.split(","):
-            base = f"/sys/fs/cgroup/memory{path}"
+            base = "/sys/fs/cgroup/memory" + path.rstrip("/")
             files = _CgroupFiles(
-                f"{base}/memory.limit_in_bytes", "", f"{base}/memory.usage_in_bytes"
+                path, f"{base}/memory.limit_in_bytes", "", f"{base}/memory.usage_in_bytes"
             )
         else:
             continue
-        if os.path.exists(files.limit):
+        # cgroup.controllers exists in every v2 cgroup, the root included,
+        # and tells a v2 mount from the unified hierarchy of a hybrid
+        # layout that has no controllers of its own.
+        marker = f"{base}/cgroup.controllers" if files.v2 else base
+        if os.path.exists(marker):
             return files
     return None
+
+
+def _cgroup_text(path: str) -> str:
+    """A cgroup file's content, "" where it does not exist or cannot be read."""
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def _cgroup_counters(text: str) -> dict[str, int]:
+    """The ``key value`` lines of a cgroup stat file."""
+    out: dict[str, int] = {}
+    for line in text.splitlines():
+        key, _, value = line.partition(" ")
+        if value.strip().isdigit():
+            out[key] = int(value)
+    return out
+
+
+def _cpu_quota(text: str) -> float:
+    """Cores from a ``cpu.max`` line, ``$QUOTA $PERIOD`` or ``max $PERIOD``."""
+    quota, _, period = text.strip().partition(" ")
+    if not quota.isdigit() or not period.isdigit() or int(period) == 0:
+        return 0.0
+    return int(quota) / int(period)
+
+
+def _pids_max(text: str) -> int:
+    text = text.strip()
+    return int(text) if text.isdigit() else 0
+
+
+def _linux_cgroup(files: _CgroupFiles | None) -> Cgroup:
+    """The cgroup's CPU quota, throttling, memory events and pid figures.
+
+    Only cgroup v2 keeps these in the cgroup's own directory. Missing
+    files, a controller not enabled for this cgroup say, leave the
+    figures at their unknown values.
+    """
+    if files is None:
+        return Cgroup()
+    if not files.v2:
+        return Cgroup(path=files.path)
+    base = files.v2
+    cpu = _cgroup_counters(_cgroup_text(f"{base}/cpu.stat"))
+    events = _cgroup_counters(_cgroup_text(f"{base}/memory.events"))
+    return Cgroup(
+        path=files.path,
+        cpu_quota=_cpu_quota(_cgroup_text(f"{base}/cpu.max")),
+        periods=cpu.get("nr_periods", 0),
+        throttled=cpu.get("nr_throttled", 0),
+        throttled_time=cpu.get("throttled_usec", 0) / 1e6,
+        oom_kills=events.get("oom_kill", -1),
+        limit_hits=events.get("max", -1),
+        high_hits=events.get("high", -1),
+        pids_max=_pids_max(_cgroup_text(f"{base}/pids.max")),
+        pids_current=_pids_max(_cgroup_text(f"{base}/pids.current")),
+    )
+
+
+def _cpu_list_size(text: str) -> int:
+    """How many CPUs a list like ``0-3,8,10-11`` names."""
+    count = 0
+    for part in text.strip().split(","):
+        low, _, high = part.partition("-")
+        if not low.isdigit():
+            continue
+        count += int(high) - int(low) + 1 if high.isdigit() else 1
+    return count
+
+
+def _linux_cpus_allowed(pid: int) -> int:
+    """The size of the affinity mask, from ``Cpus_allowed_list`` in status."""
+    try:
+        text = _read(f"/proc/{pid}/status")
+    except ProcessLookupError:
+        return 0
+    for line in text.splitlines():
+        if line.startswith("Cpus_allowed_list:"):
+            return _cpu_list_size(line.partition(":")[2])
+    return 0
 
 
 def _cgroup_bytes(path: str) -> int:

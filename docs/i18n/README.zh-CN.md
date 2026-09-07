@@ -97,6 +97,9 @@ GC 标签页显示回收占用的时间比例、每秒回收次数、被追踪�
 也就是分配最频繁的地方。Process 标签页在平台允许的范围内拆分内存，见[平台](#平台)，
 还会列出目标的子进程及其 CPU 和内存，并标出哪些是 Python 解释器，`multiprocessing`
 进程池或者由 supervisor 拉起的 worker 一眼就能看到。再开一个 `sgrud PID` 就能检查其中任何一个。
+在 Linux 上该标签页还显示目标所在的 cgroup，比如容器的 cgroup：CPU 配额和被节流的周期占比、
+OOM 击杀次数、pid 上限（线程也计入其中），旁边是进程可以运行在多少个 CPU 上。
+cgroup 的所有数字都是整个 cgroup 的，而不只是目标进程的。
 
 IPC 标签页是给挂住的进程准备的：它列出目标打开的每一个描述符，管道、带地址和状态的
 socket、共享内存、文件，以及每条管道的另一端在目标的父进程还是哪个子进程手里。
@@ -154,6 +157,7 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
     print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
+    print(snap.process.cgroup.cpu_quota, snap.process.cgroup.throttled_percent, snap.process.cgroup.oom_kills)
     print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.to_dict())  # JSON friendly
     result = m.probe(types=5)  # runs code in the target, see Probing
@@ -188,7 +192,8 @@ print("\n".join(sampler.hotspots.folded()))  # flamegraph.pl input
 
 - **Linux** 提供全部信息，包括线程的调度状态，wall 模式下正是靠它标记线程是否在 CPU 上。
   内存也是完整的，包括 rss 中匿名和文件映射各占多少、USS 和 PSS、
-  brk 堆和匿名映射、透明大页、缺页速率、cgroup 内存上限和 OOM 分数。
+  brk 堆和匿名映射、透明大页、缺页速率、cgroup 内存上限和 OOM 分数，
+  在 cgroup v2 下还有 cgroup 的 CPU 配额、节流、OOM 击杀次数和 pid 上限。
   IPC 也只有 Linux 是完整的：管道及其另一端、共享内存、文件锁，以及每个线程
   阻塞在哪个系统调用上（这需要和读内存相同的权限，并且 sgrud 只带了 x86_64、
   aarch64、riscv64 和 loongarch64 的调用号表，其它架构只显示编号）。

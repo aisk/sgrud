@@ -110,6 +110,9 @@ monitor が見たレコードをすべて蓄積します。サンプラーが動
 [プラットフォーム](#プラットフォーム)を参照してください。さらに対象の子プロセスを CPU とメモリ付きで一覧し、
 Python インタプリタであるものに印を付けるので、`multiprocessing` のプールやスーパーバイザが起動した
 ワーカーが一目で分かります。どれでも別の `sgrud PID` で検査できます。
+Linux ではこのタブに対象が属する cgroup、たとえばコンテナの cgroup も表示されます。
+CPU クォータとスロットルされた期間の割合、OOM kill の回数、pid 上限（スレッドも数えられます）に加え、
+プロセスが動ける CPU 数が並びます。cgroup の数値はすべて cgroup 全体のもので、対象プロセスだけのものではありません。
 
 IPC タブはハングしたプロセスのためのものです。対象が開いているすべての
 ディスクリプタ、つまりパイプ、アドレスと状態付きのソケット、共有メモリ、
@@ -176,6 +179,7 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
     print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
+    print(snap.process.cgroup.cpu_quota, snap.process.cgroup.throttled_percent, snap.process.cgroup.oom_kills)
     print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.to_dict())  # JSON friendly
     result = m.probe(types=5)  # runs code in the target, see Probing
@@ -214,6 +218,7 @@ print("\n".join(sampler.hotspots.folded()))  # flamegraph.pl input
   wall モードでスレッドが CPU 上にあると判定するのはこれによります。
   メモリも完全で、rss の匿名部分とファイル部分、USS と PSS、brk ヒープと匿名マッピング、
   透過的ヒュージページ、ページフォルト率、cgroup のメモリ上限、OOM スコアが得られます。
+  cgroup v2 なら cgroup の CPU クォータ、スロットル、OOM kill の回数、pid 上限も得られます。
   IPC の全体像が得られるのも Linux だけです。パイプとその反対側、共有メモリ、
   ファイルロック、各スレッドがブロックしているシステムコール（メモリの読み取りと
   同じ権限が必要で、sgrud が持つ呼び出し番号表は x86_64、aarch64、riscv64、

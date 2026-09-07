@@ -228,6 +228,90 @@ def test_memory_rows_skip_what_the_platform_lacks():
     assert "limits=cgroup 512.0 MiB of 1.0 GiB  used 50%  oom score 5" in lines
 
 
+def test_cgroup_parsing(tmp_path):
+    from sgrud.osproc import (
+        _cgroup_counters,
+        _CgroupFiles,
+        _cpu_list_size,
+        _cpu_quota,
+        _linux_cgroup,
+    )
+
+    assert _cpu_quota("max 100000\n") == 0.0
+    assert _cpu_quota("150000 100000\n") == 1.5
+    assert _cpu_quota("") == 0.0
+    assert _cpu_list_size("0-3,8,10-11") == 7
+    assert _cpu_list_size("5") == 1
+    assert _cpu_list_size("") == 0
+    assert _cgroup_counters("nr_periods 10\nnr_throttled 3\nbad x\n") == {
+        "nr_periods": 10,
+        "nr_throttled": 3,
+    }
+
+    (tmp_path / "cpu.max").write_text("200000 100000\n")
+    (tmp_path / "cpu.stat").write_text(
+        "usage_usec 5\nnr_periods 40\nnr_throttled 4\nthrottled_usec 2500000\n"
+    )
+    (tmp_path / "memory.events").write_text("low 0\nhigh 2\nmax 9\noom 1\noom_kill 1\n")
+    (tmp_path / "pids.max").write_text("max\n")
+    (tmp_path / "pids.current").write_text("17\n")
+    files = _CgroupFiles("/box", "", "", "", str(tmp_path))
+    cg = _linux_cgroup(files)
+    assert cg.path == "/box"
+    assert cg.cpu_quota == 2.0
+    assert (cg.periods, cg.throttled, cg.throttled_time) == (40, 4, 2.5)
+    assert (cg.oom_kills, cg.limit_hits, cg.high_hits) == (1, 9, 2)
+    assert (cg.pids_max, cg.pids_current) == (0, 17)
+    assert cg.throttled_percent is None
+
+    # A v1 cgroup keeps the path only, a missing directory nothing at all.
+    assert _linux_cgroup(_CgroupFiles("/v1", "", "", "")).path == "/v1"
+    assert _linux_cgroup(None).path == ""
+    empty = _linux_cgroup(_CgroupFiles("/", "", "", "", str(tmp_path / "gone")))
+    assert empty.oom_kills == -1 and empty.cpu_quota == 0.0 and empty.pids_current == 0
+
+
+def test_throttled_share():
+    from sgrud.monitor import _RateSample, _share
+
+    assert _share(None, (10.0, 1.0)) is None
+    prev = _RateSample(0.0, (10.0, 1.0))
+    assert _share(prev, (10.0, 1.0)) is None  # no period elapsed, no quota
+    assert _share(prev, (20.0, 3.0)) == 20.0
+    assert _share(prev, (20.0, 30.0)) == 100.0
+
+
+def test_cgroup_rows():
+    from sgrud.format import format_memory, memory_rows
+    from sgrud.models import Cgroup
+
+    assert "cgroup" not in dict(memory_rows(_process(cgroup=Cgroup(path="/"))))
+    rows = dict(memory_rows(_process(cgroup=Cgroup(path="/user.slice"))))
+    assert rows["cgroup"] == [("", "/user.slice")]
+    busy = _process(
+        cgroup=Cgroup(
+            path="/docker/abc",
+            cpu_quota=1.5,
+            periods=100,
+            throttled=12,
+            throttled_time=0.75,
+            throttled_percent=12.0,
+            oom_kills=1,
+            limit_hits=0,
+            high_hits=3,
+            pids_max=512,
+            pids_current=34,
+        ),
+        cpus_allowed=2,
+    )
+    lines = format_memory(busy)
+    assert lines[-2] == "limits=cpus 2"
+    assert lines[-1] == (
+        "cgroup=/docker/abc  cpu 1.5 cores  throttled 12%  throttled time 750.0ms"
+        "  oom kills 1  high hits 3  pids 34 of 512"
+    )
+
+
 def test_looks_like_python_heuristic():
     import os
 

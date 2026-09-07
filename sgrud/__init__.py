@@ -15,6 +15,7 @@ from .errors import AttachError, NotSupported, ProcessExited, SgrudError
 from .models import (
     IPC,
     Awaiter,
+    Cgroup,
     ChildProcess,
     FileLock,
     Frame,
@@ -36,6 +37,7 @@ from .monitor import Monitor
 __all__ = [
     "AttachError",
     "Awaiter",
+    "Cgroup",
     "ChildProcess",
     "FileLock",
     "Frame",

@@ -6,7 +6,7 @@ import math
 import os
 from collections.abc import Iterable, Mapping
 
-from .models import IPC, ChildProcess, Frame, OpenFile, Process, Snapshot, Task, Thread
+from .models import IPC, Cgroup, ChildProcess, Frame, OpenFile, Process, Snapshot, Task, Thread
 from .probe import ProbeResult
 
 
@@ -160,8 +160,35 @@ def memory_rows(p: Process) -> list[tuple[str, list[tuple[str, str]]]]:
         limits.append(("address space", human_bytes(lim.address_space)))
     if lim.oom_score >= 0:
         limits.append(("oom score", str(lim.oom_score)))
+    if p.cpus_allowed:
+        limits.append(("cpus", str(p.cpus_allowed)))
     rows.append(("limits", limits))
+    rows.append(("cgroup", cgroup_cells(p.cgroup)))
     return [(label, pairs) for label, pairs in rows if pairs]
+
+
+def cgroup_cells(cg: Cgroup) -> list[tuple[str, str]]:
+    """The cgroup figures worth a cell, empty for the root cgroup with nothing to say."""
+    cells: list[tuple[str, str]] = []
+    if cg.cpu_quota:
+        cells.append(("cpu", f"{cg.cpu_quota:g} cores"))
+    if cg.throttled_percent is not None:
+        cells.append(("throttled", f"{cg.throttled_percent:.0f}%"))
+    if cg.throttled:
+        cells.append(("throttled time", human_duration(cg.throttled_time)))
+    if cg.oom_kills > 0:
+        cells.append(("oom kills", str(cg.oom_kills)))
+    if cg.limit_hits > 0:
+        cells.append(("limit hits", str(cg.limit_hits)))
+    if cg.high_hits > 0:
+        cells.append(("high hits", str(cg.high_hits)))
+    if cg.pids_max:
+        cells.append(("pids", f"{cg.pids_current} of {cg.pids_max}"))
+    elif cg.pids_current:
+        cells.append(("pids", str(cg.pids_current)))
+    if cells or (cg.path and cg.path != "/"):
+        cells.insert(0, ("", cg.path or "?"))
+    return cells
 
 
 def format_memory(p: Process) -> list[str]:

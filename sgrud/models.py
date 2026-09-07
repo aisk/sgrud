@@ -260,6 +260,42 @@ class MemoryLimits:
 
 
 @dataclass(frozen=True, slots=True)
+class Cgroup:
+    """The control group the process runs in, as the kernel reports it.
+
+    Linux only, and the CPU, event and pid figures need cgroup v2. Every
+    figure is for the whole cgroup, not just this process. 0 where there
+    is no limit or the kernel does not say.
+    """
+
+    #: The cgroup's path below the hierarchy root, "" when unknown. "/"
+    #: is the root cgroup, which has no limits of its own.
+    path: str = ""
+    #: The CPU quota from ``cpu.max`` in cores, 0.0 when unlimited.
+    cpu_quota: float = 0.0
+    #: Counters from ``cpu.stat``: enforcement periods so far, periods in
+    #: which the group was throttled and, in seconds, the time its run
+    #: queues spent throttled, summed over CPUs so it can outrun wall time.
+    periods: int = 0
+    throttled: int = 0
+    throttled_time: float = 0.0
+    #: The share of enforcement periods since the previous snapshot in
+    #: which the group was throttled, ``None`` for the first snapshot or
+    #: when no period elapsed, which is the case without a quota.
+    throttled_percent: float | None = None
+    #: Counters from ``memory.events``: processes the OOM killer took,
+    #: times usage hit the limit and reclaim ran, times it went past the
+    #: high threshold. -1 when the file is not visible.
+    oom_kills: int = -1
+    limit_hits: int = -1
+    high_hits: int = -1
+    #: ``pids.max`` and ``pids.current``. Threads count as pids, so this
+    #: is the ceiling ``threading.Thread.start`` runs into.
+    pids_max: int = 0
+    pids_current: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class Process:
     pid: int
     exe: str
@@ -284,6 +320,12 @@ class Process:
     fault_rate: float | None = None
     major_fault_rate: float | None = None
     limits: MemoryLimits = MemoryLimits()
+    cgroup: Cgroup = Cgroup()
+    #: How many CPUs the scheduler may run the process on, its affinity
+    #: mask, which a cpuset or ``taskset`` narrows. This is what
+    #: ``os.process_cpu_count()`` reports inside the target. 0 where the
+    #: platform does not say.
+    cpus_allowed: int = 0
 
 
 @dataclass(frozen=True, slots=True)

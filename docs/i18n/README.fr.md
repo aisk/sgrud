@@ -128,7 +128,12 @@ permet, voir [Plateformes](#plateformes), et liste les processus enfants de
 la cible avec leur CPU et leur mémoire, en marquant ceux qui sont des
 interpréteurs Python, de sorte qu'un pool `multiprocessing` ou un worker
 lancé par un superviseur se voit d'un coup d'œil. Chacun d'eux peut être
-inspecté avec un second `sgrud PID`.
+inspecté avec un second `sgrud PID`. Sous Linux l'onglet montre aussi le
+cgroup dans lequel tourne la cible, celui du conteneur par exemple : son
+quota CPU et la part des périodes où il a été bridé, les OOM kills et la
+limite de pids, que les threads consomment aussi, à côté du nombre de CPU
+sur lesquels le processus peut tourner. Chaque chiffre du cgroup concerne
+le cgroup entier, pas seulement la cible.
 
 L'onglet IPC est fait pour le processus qui se bloque : il liste chaque
 descripteur ouvert par la cible, tubes, sockets avec leurs adresses et leur
@@ -201,6 +206,7 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
     print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
+    print(snap.process.cgroup.cpu_quota, snap.process.cgroup.throttled_percent, snap.process.cgroup.oom_kills)
     print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.to_dict())  # JSON friendly
     result = m.probe(types=5)  # runs code in the target, see Probing
@@ -240,7 +246,9 @@ c'est là que les plateformes diffèrent.
   qui est ce qui marque un thread comme étant sur le CPU en mode wall, et la
   mémoire complète : la part anonyme et la part fichier du rss, USS et PSS, le
   tas brk et les mappages anonymes, les huge pages transparentes, le taux de
-  défauts de page, la limite mémoire du cgroup et le score OOM. C'est aussi la
+  défauts de page, la limite mémoire du cgroup et le score OOM, et avec
+  cgroup v2 le quota CPU, le bridage, les OOM kills et la limite de pids du
+  cgroup. C'est aussi la
   seule plateforme avec l'image IPC complète : les tubes et leur autre
   extrémité, la mémoire partagée, les verrous de fichier et l'appel système
   dans lequel chaque thread est bloqué (ce qui demande le même accès que la

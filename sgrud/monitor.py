@@ -6,7 +6,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from . import osproc
 from .errors import AttachError, ProcessExited
@@ -56,6 +56,19 @@ def _rates(
         return (None,) * len(values)
     elapsed = now - prev.wall
     return tuple(max(0.0, (v - p) / elapsed) for v, p in zip(values, prev.values, strict=True))
+
+
+def _share(prev: _RateSample | None, values: tuple[float, ...]) -> float | None:
+    """Percent the second counter grew relative to the first since ``prev``.
+
+    ``None`` without a previous sample or when the first counter stood still.
+    """
+    if prev is None:
+        return None
+    total = values[0] - prev.values[0]
+    if total <= 0:
+        return None
+    return max(0.0, min(100.0, 100.0 * (values[1] - prev.values[1]) / total))
 
 
 class _GCTracker:
@@ -160,6 +173,7 @@ class Monitor:
         # until it has mapped its runtime, so only a yes is final.
         self._child_python: dict[int, bool] = {}
         self._faults: _RateSample | None = None
+        self._throttle: _RateSample | None = None
         self._gc = _GCTracker()
         try:
             self._stats = osproc.ProcessStats(pid)
@@ -403,6 +417,9 @@ class Monitor:
         faults = _RateSample(now, (float(stat.page_faults), float(stat.major_faults)))
         fault_rate, major_fault_rate = _rates(self._faults, now, faults.values)
         self._faults = faults
+        throttle = _RateSample(now, (float(stat.cgroup.periods), float(stat.cgroup.throttled)))
+        cgroup = replace(stat.cgroup, throttled_percent=_share(self._throttle, throttle.values))
+        self._throttle = throttle
         process = Process(
             pid=self.pid,
             exe=stat.exe,
@@ -419,6 +436,8 @@ class Monitor:
             fault_rate=fault_rate,
             major_fault_rate=major_fault_rate,
             limits=stat.limits,
+            cgroup=cgroup,
+            cpus_allowed=stat.cpus_allowed,
         )
 
         remote: dict[int, tuple[int, ThreadStatus, tuple]] = {}

@@ -125,7 +125,12 @@ es die Plattform erlaubt, siehe [Plattformen](#plattformen), und listet die
 Kindprozesse des Ziels mit CPU und Speicher auf, wobei die Python-Interpreter
 darunter markiert werden. Ein `multiprocessing`-Pool oder ein von einem
 Supervisor gestarteter Worker ist so auf einen Blick zu sehen, und jeder davon
-lässt sich mit einem zweiten `sgrud PID` untersuchen.
+lässt sich mit einem zweiten `sgrud PID` untersuchen. Unter Linux zeigt der
+Tab auch die cgroup, in der das Ziel läuft, etwa die des Containers: ihr
+CPU-Kontingent und den Anteil der Perioden, in denen sie gedrosselt wurde,
+OOM-Kills und das pid-Limit, auf das auch Threads zählen, daneben die Zahl
+der CPUs, auf denen der Prozess laufen darf. Jede cgroup-Zahl gilt für die
+ganze cgroup, nicht nur für das Ziel.
 
 Der IPC-Tab ist für den Prozess, der hängt: Er listet jeden Deskriptor, den
 das Ziel offen hat, Pipes, Sockets mit Adressen und Zustand, Shared Memory,
@@ -198,6 +203,7 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
     print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
+    print(snap.process.cgroup.cpu_quota, snap.process.cgroup.throttled_percent, snap.process.cgroup.oom_kills)
     print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.to_dict())  # JSON friendly
     result = m.probe(types=5)  # runs code in the target, see Probing
@@ -236,7 +242,8 @@ psutil vom Betriebssystem, und dort unterscheiden sich die Plattformen.
   der im wall-Modus einen Thread als auf der CPU laufend markiert, sowie das
   vollständige Speicherbild: anonymer und dateigestützter Anteil des rss, USS
   und PSS, brk-Heap und anonyme Mappings, Transparent Huge Pages,
-  Page-Fault-Rate, das Speicherlimit der cgroup und den OOM-Score. Nur hier
+  Page-Fault-Rate, das Speicherlimit der cgroup und den OOM-Score, mit cgroup
+  v2 auch CPU-Kontingent, Drosselung, OOM-Kills und pid-Limit der cgroup. Nur hier
   gibt es auch das vollständige IPC-Bild: Pipes und ihre anderen Enden, Shared
   Memory, Dateisperren und den Systemaufruf, in dem jeder Thread blockiert
   (das braucht denselben Zugriff wie das Lesen des Speichers, und eine
