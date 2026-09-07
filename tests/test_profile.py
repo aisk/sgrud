@@ -317,3 +317,30 @@ def test_recorder_rejects_what_cannot_work(tmp_path):
         Recorder(str(tmp_path / "a.html"), interval=0.01, baseline=str(tmp_path / "old.bin"))
     with pytest.raises(SgrudError, match="unknown format"):
         Recorder(str(tmp_path / "a.html"), "svg", interval=0.01)
+
+
+def test_torn_reads_are_retried(monitor, monkeypatch):
+    """A read the target tears by moving its frames is retried at once."""
+    from sgrud.remote import RemoteInspector
+
+    inspector = RemoteInspector(monitor.pid)
+    real = inspector._unwinder
+    assert real is not None
+    calls = 0
+
+    class Flaky:
+        def get_stack_trace(self):
+            nonlocal calls
+            calls += 1
+            if calls % 3:
+                raise RuntimeError("Failed to parse initial frame in chain")
+            return real.get_stack_trace()
+
+    monkeypatch.setattr(inspector, "_unwinder", Flaky())
+    assert inspector.sample().stacks()
+    assert calls == 3
+    with pytest.raises(RuntimeError, match="initial frame"):
+        inspector.sample(retries=1)
+    assert calls == 5
+    assert inspector.sample(retries=0).stacks()
+    assert calls == 6

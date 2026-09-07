@@ -313,28 +313,32 @@ class RemoteInspector:
             return ProcessExited(self.pid)
         return exc
 
-    def sample(self) -> RawSample:
+    def sample(self, retries: int = 5) -> RawSample:
         """One read in this inspector's mode, unconverted.
 
-        In ``async`` mode this reads the asyncio task graph, which takes
-        several memory reads while the target keeps running, so a torn
-        read is possible and the caller should expect the odd failure.
+        The target keeps running while its frames are read, so a thread
+        that is pushing or popping a frame at that instant makes the read
+        fail, and one such thread fails the whole sample. On a target
+        whose threads call functions in a tight loop that is every other
+        read. A failed read is retried at once up to ``retries`` times,
+        which costs a few microseconds each and gets almost all of them.
         """
         unwinder = self._live()
-        try:
-            if self.mode == "async":
-                try:
+        for attempt in range(retries + 1):
+            try:
+                if self.mode == "async":
                     result = unwinder.get_all_awaited_by()
-                except Exception as e:
-                    if _no_asyncio(e):
-                        result = ()
-                    else:
-                        raise
-            else:
-                result = unwinder.get_stack_trace()
-        except Exception as e:
-            raise self._guard(e) from e
-        return RawSample(self.mode, result)
+                else:
+                    result = unwinder.get_stack_trace()
+                return RawSample(self.mode, result)
+            except ProcessLookupError as e:
+                raise ProcessExited(self.pid) from e
+            except Exception as e:
+                if self.mode == "async" and _no_asyncio(e):
+                    return RawSample(self.mode, ())
+                if attempt == retries:
+                    raise self._guard(e) from e
+        raise AssertionError("unreachable")
 
     def stacks(self) -> dict[int, tuple[int, ThreadStatus, tuple[Frame, ...]]]:
         """Map OS thread id to (interpreter_id, status, frames leaf-first)."""
@@ -342,23 +346,25 @@ class RemoteInspector:
             raise ValueError("an async inspector reads tasks, not stacks")
         return self.sample().stacks()
 
-    def tasks(self, retries: int = 3) -> tuple[Task, ...]:
+    def tasks(self, retries: int = 5) -> tuple[Task, ...]:
         """All asyncio tasks in the target, across threads.
 
         Like ``asyncio ps`` this retries a few times before giving up on a
         torn read. Works in any mode.
         """
-        for attempt in range(retries):
+        unwinder = self._live()
+        for attempt in range(retries + 1):
             try:
-                result = self._live().get_all_awaited_by()
-                break
+                return _convert_tasks(unwinder.get_all_awaited_by())
+            except ProcessLookupError as e:
+                raise ProcessExited(self.pid) from e
             except Exception as e:
                 # asyncio not imported in the target is a normal condition.
                 if _no_asyncio(e):
                     return ()
-                if attempt == retries - 1:
+                if attempt == retries:
                     raise self._guard(e) from e
-        return _convert_tasks(result)
+        raise AssertionError("unreachable")
 
     def stats(self) -> dict[str, Any]:
         """The unwinder's own counters: memory reads, bytes, cache hit rates."""

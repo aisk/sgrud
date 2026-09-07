@@ -279,20 +279,21 @@ class Monitor:
                 self._inspectors[mode] = inspector
             return inspector
 
-    def sample(self, mode: str = "wall") -> RawSample:
+    def sample(self, mode: str = "wall", *, retries: int = 5) -> RawSample:
         """One read of the stacks (or, in ``async`` mode, the tasks), unconverted.
 
         This is what a profiler wants to call hundreds of times per second.
         ``mode`` is one of :data:`sgrud.profile.MODES` and decides which
         threads the read includes. The result converts to sgrud's types
         with :meth:`RawSample.stacks` or :meth:`RawSample.tasks` and can be
-        recorded as is, see :mod:`sgrud.export`. Raises ProcessExited when
-        the target is gone.
+        recorded as is, see :mod:`sgrud.export`. A read torn by the target
+        changing its frames is retried at once up to ``retries`` times.
+        Raises ProcessExited when the target is gone.
         """
         inspector = self._get_inspector(mode)
         with self._lock:
             try:
-                return inspector.sample()
+                return inspector.sample(retries)
             except ProcessExited:
                 raise
             except Exception:
