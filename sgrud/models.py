@@ -392,11 +392,14 @@ class IPC:
     files: tuple[OpenFile, ...] = ()
     locks: tuple[FileLock, ...] = ()
     mappings: tuple[SharedMapping, ...] = ()
+    #: True where :attr:`files` can only ever hold regular files and
+    #: sockets (macOS and Windows), so :attr:`num_fds` does not bound it.
+    partial: bool = False
 
     @property
     def truncated(self) -> bool:
-        """Whether descriptors were left out of :attr:`files`."""
-        return len(self.files) < self.num_fds and len(self.files) > 0
+        """Whether descriptors were cut off the end of :attr:`files`."""
+        return not self.partial and 0 < len(self.files) < self.num_fds
 
     def counts(self) -> dict[str, int]:
         """Descriptors per kind, in the order the kinds are worth reading."""

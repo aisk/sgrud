@@ -47,9 +47,10 @@ def test_demo_app_has_something_on_every_tab():
             ipc = snap.ipc
             assert ipc is not None
             kinds = ipc.counts()
-            assert kinds.get("pipe", 0) >= 1 and kinds.get("socket", 0) >= 6, kinds
             assert any(f.kind == "socket" and f.status == "LISTEN" for f in ipc.files)
             if sys.platform.startswith("linux"):
+                # psutil lists no pipes and fewer sockets elsewhere.
+                assert kinds.get("pipe", 0) >= 1 and kinds.get("socket", 0) >= 6, kinds
                 assert kinds.get("shm", 0) >= 1, kinds
                 assert ipc.semaphores >= 1
                 # The file lock a child holds, and the thread blocked on it.

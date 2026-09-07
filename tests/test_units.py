@@ -1,5 +1,6 @@
 """Tests that need no target process."""
 
+import dataclasses
 import math
 import sys
 from typing import Any
@@ -368,6 +369,7 @@ def test_ipc_counts_and_same_object():
     )
     assert ipc.counts() == {"pipe": 2, "socket": 1, "file": 1}
     assert ipc.truncated  # 40 descriptors, 4 listed
+    assert not dataclasses.replace(ipc, partial=True).truncated
     assert [o.fd for o in ipc.same_object(3)] == [4]
     assert ipc.same_object(6) == ()
     assert ipc.semaphores == 1

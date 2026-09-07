@@ -323,7 +323,7 @@ def _with_connections(files: list[OpenFile], conns: Iterable[Any]) -> list[OpenF
 def _family(family, socktype) -> str:
     import socket
 
-    if family == socket.AF_UNIX:
+    if family == getattr(socket, "AF_UNIX", None):  # missing on Windows
         return "unix"
     v6 = "6" if family == socket.AF_INET6 else ""
     if socktype == socket.SOCK_STREAM:
@@ -503,4 +503,4 @@ def read_ipc(
     ]
     files = _with_connections(files, connections_of(proc))
     files.sort(key=lambda f: (f.fd < 0, f.fd, f.target))
-    return IPC(num_fds=num_fds, max_fds=max_fds, files=tuple(files))
+    return IPC(num_fds=num_fds, max_fds=max_fds, files=tuple(files), partial=True)

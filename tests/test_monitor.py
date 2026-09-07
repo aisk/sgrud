@@ -148,7 +148,7 @@ def test_stack_sampling_is_fast(monitor):
     n = 200
     t0 = time.perf_counter()
     for _ in range(n):
-        monitor.snapshot(tasks=False, gc=False)
+        monitor.snapshot(tasks=False, gc=False, children=False, ipc=False)
     per_sample = (time.perf_counter() - t0) / n
     # psutil's thread listing on Windows snapshots every thread on the system.
     budget = 0.02 if sys.platform == "win32" else 0.005
@@ -303,10 +303,21 @@ def test_children_are_listed_and_marked_python():
             assert len(pythons) == 2, kids
             others = [c for c in kids.values() if not c.python]
             assert others and all(c.rss > 0 for c in kids.values())
-            # The grandchild hangs off the child, both under the target.
-            grandchild = next(c for c in pythons if c.parent_pid != proc.pid)
-            assert grandchild.parent_pid in kids and kids[grandchild.parent_pid].python
-            assert list(kids).index(grandchild.parent_pid) < list(kids).index(grandchild.pid)
+
+            # The grandchild hangs off the child, both under the target. A venv
+            # launcher on Windows adds a non-Python hop above each of them.
+            def ancestors(c):
+                out = []
+                while c.parent_pid in kids:
+                    c = kids[c.parent_pid]
+                    out.append(c)
+                return out
+
+            grandchild = max(pythons, key=lambda c: len(ancestors(c)))
+            child = next(c for c in pythons if c is not grandchild)
+            assert child in ancestors(grandchild)
+            assert all(not c.python for c in ancestors(child))
+            assert list(kids).index(child.pid) < list(kids).index(grandchild.pid)
             time.sleep(0.15)
             again = m.snapshot(stacks=False, tasks=False, gc=False)
             assert all(c.cpu_percent is not None for c in again.children)

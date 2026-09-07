@@ -243,6 +243,8 @@ def ipc_summary(ipc: IPC) -> list[str]:
     lines = [f"fds      {usage}   {counts}".rstrip()]
     if ipc.truncated:
         lines[-1] += f"   (first {len(ipc.files)} listed)"
+    elif ipc.partial:
+        lines[-1] += "   (files and sockets listed)"
     shm = [m for m in ipc.mappings if m.kind == "shm"]
     if shm or ipc.semaphores:
         parts = [f"{m.path}{' (deleted)' if m.deleted else ''} {human_bytes(m.size)}" for m in shm]
