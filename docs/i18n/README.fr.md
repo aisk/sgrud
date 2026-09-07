@@ -41,6 +41,9 @@ sgrud profile PID                   échantillonne les piles pendant 5 s, affich
 sgrud profile PID -d 30 --mode gil  échantillonne pendant 30 s, ne compte que le thread détenant le GIL
 sgrud profile PID --mode async      échantillonne les tâches asyncio au lieu des threads
 sgrud profile PID --folded          piles repliées pour flamegraph.pl ou speedscope
+sgrud profile PID -o out.html       écrit un flame graph, ou .json / .pstats / .txt / .jsonl / un dossier
+sgrud profile PID -o out.bin        enregistre pour `python -m profiling.sampling replay`
+sgrud PID --record out.bin          l'interface, en enregistrant chaque échantillon pris
 ```
 
 `--no-stacks`, `--no-tasks` et `--no-gc` retirent de l'interface ou du
@@ -52,6 +55,12 @@ dump les sections dont vous n'avez pas besoin.
   endormi pèse autant qu'un thread occupé.
 - **gil** : seul le détenteur du GIL compte. Cela répond à la question
   « où passe le CPU ».
+- **cpu** : seuls les threads que l'OS exécute sur un cœur comptent, donc du
+  code C ayant relâché le GIL compte encore et un thread attendant le GIL
+  ne compte pas.
+- **exception** : seuls les threads en train de traiter une exception
+  comptent, ce qui montre où les exceptions sont levées et jusqu'où elles
+  remontent avant d'être attrapées.
 - **async** : échantillonne les tâches asyncio au lieu des piles de threads,
   puisqu'une coroutine en attente dans un `await` ne figure sur la pile
   d'aucun thread. Chaque tâche feuille devient une pile : ses propres
@@ -60,6 +69,21 @@ dump les sections dont vous n'avez pas besoin.
   ce qui répond à la question « qu'attendent mes tâches ». C'est plus lent
   par échantillon que la lecture d'une pile, attendez-vous donc à une
   fréquence effective plus basse.
+
+### Formats de sortie
+
+`profile -o PATH` écrit les échantillons dans un format de
+`profiling.sampling` de la bibliothèque standard (le profileur Tachyon) au
+lieu d'afficher un tableau. L'extension choisit le format : `.html` est un
+flame graph, `.json` un document Firefox Profiler, `.pstats` se charge avec
+`pstats.Stats`, `.txt` contient des piles repliées, `.jsonl` un échantillon
+par ligne et un dossier reçoit une carte de chaleur du code source. `.bin`
+est le format binaire de Tachyon, que `python -m profiling.sampling replay`
+convertit plus tard vers n'importe lequel des autres. `--baseline old.bin`
+rend le flame graph différentiel par rapport à un enregistrement antérieur,
+et `--opcodes` enregistre l'instruction bytecode de chaque frame pour les
+formats qui l'affichent. `sgrud PID --record out.bin` fait le même
+enregistrement sous l'interface, à travers les changements de mode.
 
 ### TUI
 
@@ -70,7 +94,7 @@ dump les sections dont vous n'avez pas besoin.
 | `+` / `-` | modifier l'intervalle de rafraîchissement |
 | `q` | quitter |
 | `f` | filtre de threads (Hotspots et Flame) |
-| `m` | alterner entre les modes wall/gil/async (Hotspots et Flame) |
+| `m` | alterner entre les modes d'échantillonnage (Hotspots et Flame) |
 | `c` | effacer les échantillons (Hotspots et Flame) |
 | `s` | basculer le tri self/total (Hotspots) |
 | `enter` / `backspace` / `esc` | zoom avant / arrière / réinitialiser (Flame) |
@@ -147,8 +171,12 @@ thread en arrière-plan et alimente un agrégateur `Hotspots` :
 ```python
 from sgrud.sampler import Sampler
 
-with Sampler(monitor, rate=500, mode="gil") as sampler:
+from sgrud.export import Recorder
+
+flame = Recorder("profile.html", interval=1 / 500)
+with Sampler(monitor, rate=500, mode="gil", recorders=[flame]) as sampler:
     time.sleep(5)
+sampler.close()  # writes profile.html
 for row in sampler.hotspots.rows(sort="self", limit=10):
     print(row.self_percent, row.funcname, row.filename)
 tree = sampler.hotspots.call_tree()  # merged call tree, one child per thread

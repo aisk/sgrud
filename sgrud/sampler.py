@@ -2,15 +2,19 @@
 
 Runs in a plain thread so it works with or without the Textual UI. The
 Monitor serializes access to the remote unwinder, so the UI can keep taking
-snapshots while the sampler runs.
+snapshots while the sampler runs. Every sample can also go to any number
+of :class:`~sgrud.export.Recorder` objects, which write it out in the
+formats of the standard library's ``profiling.sampling``.
 """
 
 from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Iterable
 
 from .errors import ProcessExited, SgrudError
+from .export import Recorder
 from .monitor import Monitor
 from .profile import Hotspots
 
@@ -23,12 +27,14 @@ class Sampler:
         *,
         rate: float = 100.0,
         mode: str = "wall",
+        recorders: Iterable[Recorder] = (),
     ):
         if rate <= 0:
             raise ValueError("rate must be positive")
         self.monitor = monitor
         self.hotspots = hotspots if hotspots is not None else Hotspots(mode)
         self.rate = rate
+        self.recorders = list(recorders)
         self.errors = 0
         self.last_error: str | None = None
         #: Set when the target went away while sampling.
@@ -60,12 +66,28 @@ class Sampler:
     def __exit__(self, *exc) -> None:
         self.stop()
 
+    def close(self) -> None:
+        """Stop sampling and write out every recorder."""
+        self.stop()
+        for recorder in self.recorders:
+            recorder.close()
+        self.recorders.clear()
+
     def _sample(self) -> None:
         # The mode is read on every sample so the UI can switch it live.
-        if self.hotspots.mode == "async":
-            self.hotspots.add_tasks(self.monitor.sample_tasks())
+        mode = self.hotspots.mode
+        try:
+            sample = self.monitor.sample(mode)
+        except Exception:
+            for recorder in self.recorders:
+                recorder.collect_failed()
+            raise
+        if mode == "async":
+            self.hotspots.add_tasks(sample.tasks())
         else:
-            self.hotspots.add(self.monitor.sample_stacks())
+            self.hotspots.add(sample.stacks())
+        for recorder in self.recorders:
+            recorder.collect(sample)
 
     def _run(self) -> None:
         period = 1.0 / self.rate

@@ -11,7 +11,15 @@ from dataclasses import dataclass
 from . import osproc
 from .errors import AttachError, ProcessExited
 from .models import GCGeneration, Process, Snapshot, Task, Thread, ThreadStatus
-from .remote import GCRecord, RemoteInspector, access_hint, build_gc, interpreter_pid
+from .remote import (
+    UNWINDER_MODES,
+    GCRecord,
+    RawSample,
+    RemoteInspector,
+    access_hint,
+    build_gc,
+    interpreter_pid,
+)
 
 #: Collections kept per generation across snapshots.
 GC_HISTORY = 200
@@ -101,6 +109,7 @@ class Monitor:
         native_frames: bool = True,
         gc_markers: bool = True,
         cache_frames: bool | None = None,
+        opcodes: bool = False,
     ):
         """``cache_frames`` defaults to the opposite of ``gc_markers``.
 
@@ -109,13 +118,20 @@ class Monitor:
         change them, so with the cache on the ``<GC>`` marker never shows
         up (CPython 3.15). Reading a stack without the cache costs a few
         microseconds more.
+
+        ``opcodes`` makes raw samples carry the current bytecode
+        instruction of every frame, for the ``profiling.sampling`` formats
+        that show it (gecko, heatmap, binary).
         """
         osproc.ensure_supported()
         if cache_frames is None:
             cache_frames = not gc_markers
         self.pid = pid
         self._child = child
-        self._inspector: RemoteInspector | None = None
+        # One unwinder per sampling mode, created on demand. The unwinder
+        # decides which threads a mode includes, so a mode is a property
+        # of the unwinder rather than of a read.
+        self._inspectors: dict[str, RemoteInspector] = {}
         #: Why the target's memory cannot be read, or None for full access.
         #: In limited mode only what the OS reports (memory, CPU, thread
         #: names) is available; stacks, tasks, GC and hotspots are not.
@@ -124,7 +140,7 @@ class Monitor:
         # background Sampler and the UI thread share one Monitor.
         self._lock = threading.Lock()
         self._inspector_opts = dict(
-            native=native_frames, gc_markers=gc_markers, cache_frames=cache_frames
+            native=native_frames, gc_markers=gc_markers, cache_frames=cache_frames, opcodes=opcodes
         )
         self._proc_cpu: _CpuSample | None = None
         self._thread_cpu: dict[int, _CpuSample] = {}
@@ -232,9 +248,10 @@ class Monitor:
         return self._child
 
     def close(self, *, kill_child: bool = True) -> None:
-        if self._inspector is not None:
-            self._inspector.close()
-            self._inspector = None
+        with self._lock:
+            for inspector in self._inspectors.values():
+                inspector.close()
+            self._inspectors.clear()
         if self._child is not None and kill_child and self._child.poll() is None:
             self._child.kill()
             self._child.wait()
@@ -245,30 +262,47 @@ class Monitor:
     def __exit__(self, *exc) -> None:
         self.close()
 
-    def _get_inspector(self) -> RemoteInspector:
+    def _get_inspector(self, mode: str = "wall") -> RemoteInspector:
         if self.limited is not None:
             raise AttachError(self.pid, "limited mode", self.limited)
+        if mode not in UNWINDER_MODES:
+            raise ValueError(f"mode must be one of {tuple(UNWINDER_MODES)}")
         with self._lock:
-            if self._inspector is None:
-                self._inspector = RemoteInspector(self.pid, **self._inspector_opts)
-            return self._inspector
+            inspector = self._inspectors.get(mode)
+            if inspector is None:
+                inspector = RemoteInspector(self.pid, mode=mode, **self._inspector_opts)
+                self._inspectors[mode] = inspector
+            return inspector
 
-    def sample_stacks(self) -> dict[int, tuple[int, ThreadStatus, tuple]]:
-        """Read only the Python stacks, as fast as possible.
+    def sample(self, mode: str = "wall") -> RawSample:
+        """One read of the stacks (or, in ``async`` mode, the tasks), unconverted.
 
-        Returns a mapping of OS thread id to (interpreter_id, status, frames).
         This is what a profiler wants to call hundreds of times per second.
-        Raises ProcessExited when the target is gone.
+        ``mode`` is one of :data:`sgrud.profile.MODES` and decides which
+        threads the read includes. The result converts to sgrud's types
+        with :meth:`RawSample.stacks` or :meth:`RawSample.tasks` and can be
+        recorded as is, see :mod:`sgrud.export`. Raises ProcessExited when
+        the target is gone.
         """
-        inspector = self._get_inspector()
+        inspector = self._get_inspector(mode)
         with self._lock:
             try:
-                return inspector.stacks()
+                return inspector.sample()
             except ProcessExited:
                 raise
             except Exception:
                 self._check_alive()
                 raise
+
+    def sample_stacks(self, mode: str = "wall") -> dict[int, tuple[int, ThreadStatus, tuple]]:
+        """Read only the Python stacks, as fast as possible.
+
+        Returns a mapping of OS thread id to (interpreter_id, status, frames).
+        Raises ProcessExited when the target is gone.
+        """
+        if mode == "async":
+            raise ValueError("async mode samples tasks, use sample_tasks()")
+        return self.sample(mode).stacks()
 
     def sample_tasks(self) -> tuple[Task, ...]:
         """Read only the asyncio tasks, as fast as possible.
@@ -277,15 +311,18 @@ class Monitor:
         empty tuple when the target has not imported asyncio. Raises
         ProcessExited when the target is gone.
         """
-        inspector = self._get_inspector()
+        return self.sample("async").tasks()
+
+    def read_stats(self, mode: str = "wall") -> dict[str, int | float]:
+        """Counters of the reader used for ``mode``: memory reads, bytes, cache hits.
+
+        They count every read made in that mode since the monitor was
+        opened, so for ``wall`` the snapshots are included. Empty in
+        limited mode or before the first read.
+        """
         with self._lock:
-            try:
-                return inspector.tasks(retries=1)
-            except ProcessExited:
-                raise
-            except Exception:
-                self._check_alive()
-                raise
+            inspector = self._inspectors.get(mode)
+            return inspector.stats() if inspector is not None else {}
 
     def _check_alive(self) -> None:
         if self._child is not None and self._child.poll() is not None:

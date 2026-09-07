@@ -40,6 +40,9 @@ sgrud profile PID                   5 s lang Stacks abtasten, die heißesten Fun
 sgrud profile PID -d 30 --mode gil  30 s lang abtasten, nur den Thread mit dem GIL zählen
 sgrud profile PID --mode async      asyncio-Tasks statt Threads abtasten
 sgrud profile PID --folded          zusammengefaltete Stacks für flamegraph.pl oder speedscope
+sgrud profile PID -o out.html       Flame-Graph schreiben, oder .json / .pstats / .txt / .jsonl / ein Verzeichnis
+sgrud profile PID -o out.bin        Aufzeichnung für `python -m profiling.sampling replay`
+sgrud PID --record out.bin          die Oberfläche, wobei jedes Sample aufgezeichnet wird
 ```
 
 `--no-stacks`, `--no-tasks` und `--no-gc` blenden Abschnitte, die Sie nicht
@@ -51,6 +54,12 @@ brauchen, aus der Oberfläche oder dem Dump aus.
   wiegt also genauso viel wie ein beschäftigter.
 - **gil**: nur der Inhaber des GIL zählt. Das beantwortet die Frage „wohin
   geht die CPU“.
+- **cpu**: nur Threads zählen, die das Betriebssystem gerade auf einem Kern
+  ausführt. C-Code, der den GIL freigegeben hat, zählt also weiterhin, ein
+  Thread, der auf den GIL wartet, nicht.
+- **exception**: nur Threads zählen, die gerade eine Exception behandeln.
+  Das zeigt, wo Exceptions ausgelöst werden und wie weit sie wandern, bevor
+  sie gefangen werden.
 - **async**: tastet asyncio-Tasks statt Thread-Stacks ab, denn eine Coroutine,
   die in einem `await` wartet, liegt auf keinem Thread-Stack. Jeder Blatt-Task
   wird zu einem Stack: seine eigenen Frames, eine `<task NAME>`-Markierung und
@@ -58,6 +67,22 @@ brauchen, aus der Oberfläche oder dem Dump aus.
   Task zählt, ob laufend oder angehalten, das beantwortet also die Frage
   „worauf warten meine Tasks“. Pro Sample ist das langsamer als das Lesen eines
   Stacks, rechnen Sie daher mit einer niedrigeren erreichten Rate.
+
+### Ausgabeformate
+
+`profile -o PATH` schreibt die Samples in einem Format von
+`profiling.sampling` aus der Standardbibliothek (dem Tachyon-Profiler),
+statt eine Tabelle auszugeben. Die Endung bestimmt das Format: `.html` ist
+ein Flame-Graph, `.json` ein Firefox-Profiler-Dokument, `.pstats` lässt sich
+mit `pstats.Stats` laden, `.txt` sind zusammengefaltete Stacks, `.jsonl` ein
+Sample pro Zeile und ein Verzeichnis bekommt eine Heatmap des Quelltexts.
+`.bin` ist das Binärformat von Tachyon, das
+`python -m profiling.sampling replay` später in jedes der anderen umwandelt.
+`--baseline old.bin` macht den Flame-Graph zu einem Differenzgraphen
+gegenüber einer früheren Aufzeichnung, und `--opcodes` zeichnet für die
+Formate, die sie anzeigen, die Bytecode-Instruktion jedes Frames auf.
+`sgrud PID --record out.bin` macht dieselbe Aufzeichnung unter der
+Oberfläche, über Moduswechsel hinweg.
 
 ### TUI
 
@@ -68,7 +93,7 @@ brauchen, aus der Oberfläche oder dem Dump aus.
 | `+` / `-` | Aktualisierungsintervall ändern |
 | `q` | beenden |
 | `f` | Thread-Filter (Hotspots und Flame) |
-| `m` | Modus wall/gil/async durchschalten (Hotspots und Flame) |
+| `m` | Sampling-Modus durchschalten (Hotspots und Flame) |
 | `c` | Samples löschen (Hotspots und Flame) |
 | `s` | Sortierung self/total umschalten (Hotspots) |
 | `enter` / `backspace` / `esc` | hineinzoomen / herauszoomen / zurücksetzen (Flame) |
@@ -144,8 +169,12 @@ Hintergrund-Thread aus und speist einen `Hotspots`-Aggregator:
 ```python
 from sgrud.sampler import Sampler
 
-with Sampler(monitor, rate=500, mode="gil") as sampler:
+from sgrud.export import Recorder
+
+flame = Recorder("profile.html", interval=1 / 500)
+with Sampler(monitor, rate=500, mode="gil", recorders=[flame]) as sampler:
     time.sleep(5)
+sampler.close()  # writes profile.html
 for row in sampler.hotspots.rows(sort="self", limit=10):
     print(row.self_percent, row.funcname, row.filename)
 tree = sampler.hotspots.call_tree()  # merged call tree, one child per thread

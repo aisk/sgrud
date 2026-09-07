@@ -191,8 +191,86 @@ def _translate_attach_error(pid: int, exc: BaseException) -> AttachError:
     return AttachError(pid, text, hint, transient=transient)
 
 
+#: Sampling modes and the unwinder mode each one uses. The unwinder drops
+#: threads that do not match the mode, so ``gil`` reads only the GIL
+#: holder, ``cpu`` only threads the OS has on a core and ``exception``
+#: only threads handling an exception. ``async`` reads asyncio tasks.
+UNWINDER_MODES = {"wall": 0, "cpu": 1, "gil": 2, "exception": 4, "async": 0}
+
+
+@dataclass(frozen=True, slots=True)
+class RawSample:
+    """One read of the target's stacks as ``_remote_debugging`` returned it.
+
+    ``data`` is opaque to the rest of sgrud. It is what the standard
+    library's ``profiling.sampling`` collectors consume, so a sample can be
+    handed to them unchanged, see :mod:`sgrud.export`. :meth:`stacks` and
+    :meth:`tasks` convert it to sgrud's own types.
+    """
+
+    mode: str
+    data: Any
+
+    def stacks(self) -> dict[int, tuple[int, ThreadStatus, tuple[Frame, ...]]]:
+        """Map OS thread id to (interpreter_id, status, frames leaf-first)."""
+        if self.mode == "async":
+            raise ValueError("an async sample holds tasks, not thread stacks")
+        return _convert_stacks(self.data)
+
+    def tasks(self) -> tuple[Task, ...]:
+        if self.mode != "async":
+            raise ValueError("only an async sample holds tasks")
+        return _convert_tasks(self.data)
+
+
+def _convert_stacks(result: Any) -> dict[int, tuple[int, ThreadStatus, tuple[Frame, ...]]]:
+    out: dict[int, tuple[int, ThreadStatus, tuple[Frame, ...]]] = {}
+    for interp in result:
+        for t in interp.threads:
+            out[t.thread_id] = (
+                interp.interpreter_id,
+                ThreadStatus(t.status),
+                _frames(t.frame_info),
+            )
+    return out
+
+
+def _convert_tasks(result: Any) -> tuple[Task, ...]:
+    tasks: list[Task] = []
+    for awaited in result:
+        for t in awaited.awaited_by:
+            frames = tuple(_frame(f) for coro in t.coroutine_stack for f in coro.call_stack)
+            awaiters = tuple(
+                Awaiter(task_id=int(a.task_name), frames=_frames(a.call_stack))
+                for a in t.awaited_by
+                if isinstance(a.task_name, int)
+            )
+            tasks.append(
+                Task(
+                    id=t.task_id,
+                    name=str(t.task_name),
+                    thread_id=awaited.thread_id,
+                    frames=frames,
+                    awaited_by=awaiters,
+                )
+            )
+    return tuple(tasks)
+
+
+def _no_asyncio(exc: BaseException) -> bool:
+    """Whether reading tasks failed because the target never imported asyncio."""
+    text = str(exc)
+    return isinstance(exc, RuntimeError) and ("AsyncioDebug" in text or "asyncio" in text.lower())
+
+
 class RemoteInspector:
-    """Reads stacks, asyncio tasks and GC stats from another process."""
+    """Reads stacks, asyncio tasks and GC stats from another process.
+
+    ``mode`` is one of :data:`UNWINDER_MODES`. Only ``wall`` and ``async``
+    return every thread, the others are for sampling. ``opcodes`` makes
+    each raw frame carry the bytecode instruction being executed, which
+    only the ``profiling.sampling`` collectors use.
+    """
 
     def __init__(
         self,
@@ -201,18 +279,24 @@ class RemoteInspector:
         native: bool = True,
         gc_markers: bool = True,
         cache_frames: bool = True,
-        only_active_thread: bool = False,
+        mode: str = "wall",
+        opcodes: bool = False,
     ):
+        if mode not in UNWINDER_MODES:
+            raise ValueError(f"mode must be one of {tuple(UNWINDER_MODES)}")
         self.pid = pid
-        self._only_active = only_active_thread
+        self.mode = mode
         try:
             self._unwinder = _rd.RemoteUnwinder(
                 pid,
-                all_threads=not only_active_thread,
-                only_active_thread=only_active_thread,
+                all_threads=True,
+                mode=UNWINDER_MODES[mode],
+                skip_non_matching_threads=mode not in ("wall", "async"),
                 native=native,
                 gc=gc_markers,
+                opcodes=opcodes,
                 cache_frames=cache_frames,
+                stats=True,
             )
         except ProcessLookupError as e:
             raise ProcessExited(pid) from e
@@ -229,61 +313,59 @@ class RemoteInspector:
             return ProcessExited(self.pid)
         return exc
 
-    def stacks(self) -> dict[int, tuple[int, ThreadStatus, tuple[Frame, ...]]]:
-        """Map OS thread id to (interpreter_id, status, frames leaf-first)."""
+    def sample(self) -> RawSample:
+        """One read in this inspector's mode, unconverted.
+
+        In ``async`` mode this reads the asyncio task graph, which takes
+        several memory reads while the target keeps running, so a torn
+        read is possible and the caller should expect the odd failure.
+        """
+        unwinder = self._live()
         try:
-            result = self._live().get_stack_trace()
+            if self.mode == "async":
+                try:
+                    result = unwinder.get_all_awaited_by()
+                except Exception as e:
+                    if _no_asyncio(e):
+                        result = ()
+                    else:
+                        raise
+            else:
+                result = unwinder.get_stack_trace()
         except Exception as e:
             raise self._guard(e) from e
-        out: dict[int, tuple[int, ThreadStatus, tuple[Frame, ...]]] = {}
-        for interp in result:
-            for t in interp.threads:
-                out[t.thread_id] = (
-                    interp.interpreter_id,
-                    ThreadStatus(t.status),
-                    _frames(t.frame_info),
-                )
-        return out
+        return RawSample(self.mode, result)
+
+    def stacks(self) -> dict[int, tuple[int, ThreadStatus, tuple[Frame, ...]]]:
+        """Map OS thread id to (interpreter_id, status, frames leaf-first)."""
+        if self.mode == "async":
+            raise ValueError("an async inspector reads tasks, not stacks")
+        return self.sample().stacks()
 
     def tasks(self, retries: int = 3) -> tuple[Task, ...]:
         """All asyncio tasks in the target, across threads.
 
-        Walking the task graph takes several memory reads while the target
-        keeps running, so a torn read is possible. Like ``asyncio ps`` we
-        retry a few times before giving up.
+        Like ``asyncio ps`` this retries a few times before giving up on a
+        torn read. Works in any mode.
         """
         for attempt in range(retries):
             try:
                 result = self._live().get_all_awaited_by()
                 break
-            except RuntimeError as e:
+            except Exception as e:
                 # asyncio not imported in the target is a normal condition.
-                if "AsyncioDebug" in str(e) or "asyncio" in str(e).lower():
+                if _no_asyncio(e):
                     return ()
                 if attempt == retries - 1:
                     raise self._guard(e) from e
-            except Exception as e:
-                if attempt == retries - 1:
-                    raise self._guard(e) from e
-        tasks: list[Task] = []
-        for awaited in result:
-            for t in awaited.awaited_by:
-                frames = tuple(_frame(f) for coro in t.coroutine_stack for f in coro.call_stack)
-                awaiters = tuple(
-                    Awaiter(task_id=int(a.task_name), frames=_frames(a.call_stack))
-                    for a in t.awaited_by
-                    if isinstance(a.task_name, int)
-                )
-                tasks.append(
-                    Task(
-                        id=t.task_id,
-                        name=str(t.task_name),
-                        thread_id=awaited.thread_id,
-                        frames=frames,
-                        awaited_by=awaiters,
-                    )
-                )
-        return tuple(tasks)
+        return _convert_tasks(result)
+
+    def stats(self) -> dict[str, Any]:
+        """The unwinder's own counters: memory reads, bytes, cache hit rates."""
+        try:
+            return dict(self._live().get_stats())
+        except Exception:
+            return {}
 
     def gc_records(self) -> tuple[GCRecord, ...]:
         """The raw contents of the target's GC history rings, empty slots dropped."""

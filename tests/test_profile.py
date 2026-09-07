@@ -1,6 +1,11 @@
+import pstats
 import time
 
-from sgrud.format import format_hotspots
+import pytest
+
+from sgrud.errors import SgrudError
+from sgrud.export import Recorder, guess_format
+from sgrud.format import format_hotspots, format_read_stats
 from sgrud.models import Awaiter, Frame, Task, ThreadStatus
 from sgrud.profile import Hotspots, task_stacks
 from sgrud.sampler import Sampler
@@ -210,3 +215,105 @@ def test_sampler_async_mode_sees_sleeping_tasks(monitor):
     assert rows["main"].self_percent < 5
     assert 5 < rows["main"].total_percent < 25
     assert rows["<task Task-1>"].total_samples == rows["main"].total_samples
+
+
+def test_sampler_cpu_mode_counts_only_running_threads(monitor):
+    with Sampler(monitor, rate=300, mode="cpu") as sampler:
+        time.sleep(0.5)
+    rows = {r.funcname: r for r in sampler.hotspots.rows()}
+    assert "busy_loop" in rows, sampler.last_error
+    assert "idle_loop" not in rows
+    assert "except_loop" not in rows
+    assert rows["busy_loop"].self_percent > 80
+
+
+def test_sampler_exception_mode_sees_handlers(monitor):
+    with Sampler(monitor, rate=300, mode="exception") as sampler:
+        time.sleep(0.5)
+    rows = {r.funcname: r for r in sampler.hotspots.rows()}
+    assert "except_loop" in rows, sampler.last_error
+    assert "busy_loop" not in rows and "idle_loop" not in rows
+    assert rows["except_loop"].total_percent == 100.0
+
+
+def test_hotspots_cpu_and_exception_modes_filter_by_status():
+    sample = {
+        1: (0, ThreadStatus.ON_CPU, (_f("running"),)),
+        2: (0, ThreadStatus.HAS_EXCEPTION, (_f("handling"),)),
+        3: (0, ThreadStatus.NONE, (_f("waiting"),)),
+    }
+    cpu, exc = Hotspots("cpu"), Hotspots("exception")
+    cpu.add(sample)
+    exc.add(sample)
+    assert [r.funcname for r in cpu.rows()] == ["running"]
+    assert [r.funcname for r in exc.rows()] == ["handling"]
+
+
+def test_raw_samples_convert_and_count_reads(monitor):
+    sample = monitor.sample()
+    stacks = sample.stacks()
+    assert any(frames and frames[0].funcname == "busy_loop" for _, _, frames in stacks.values())
+    with pytest.raises(ValueError):
+        sample.tasks()
+    tasks = monitor.sample("async")
+    assert any(t.name == "branch-0" for t in tasks.tasks())
+    stats = monitor.read_stats()
+    assert stats["memory_reads"] > 0 and stats["memory_bytes_read"] > 0
+    assert format_read_stats(stats).startswith("read ")
+    assert format_read_stats({}) == ""
+    assert monitor.read_stats("cpu") == {} or monitor.read_stats("cpu")["memory_reads"] >= 0
+
+
+def test_recorders_write_every_format(monitor, tmp_path):
+    import _remote_debugging
+
+    paths = {
+        "binary": tmp_path / "p.bin",
+        "flamegraph": tmp_path / "f.html",
+        "gecko": tmp_path / "g.json",
+        "pstats": tmp_path / "p.pstats",
+        "collapsed": tmp_path / "c.txt",
+        "jsonl": tmp_path / "j.jsonl",
+        "heatmap": tmp_path / "heat",
+    }
+    recorders = [Recorder(str(path), interval=1 / 200) for path in paths.values()]
+    assert [r.format for r in recorders] == list(paths)
+    with Sampler(monitor, rate=200, recorders=recorders) as sampler:
+        time.sleep(0.5)
+    sampler.close()
+    assert sampler.recorders == []
+    assert recorders[0].samples == sampler.hotspots.samples > 20
+    for fmt, path in paths.items():
+        assert path.exists(), fmt
+    assert (paths["heatmap"] / "index.html").exists()
+    assert "busy_loop" in paths["collapsed"].read_text()
+    assert "busy_loop" in paths["flamegraph"].read_text()
+
+    reader = _remote_debugging.BinaryReader(str(paths["binary"]))
+    count = reader.get_info()["sample_count"]
+    reader.close()
+    # The file counts one sample per thread stack.
+    assert isinstance(count, int) and count >= recorders[0].samples
+    profile = pstats.Stats(str(paths["pstats"])).get_stats_profile()
+    assert "busy_loop" in profile.func_profiles
+
+    diff = Recorder(str(tmp_path / "diff.html"), interval=1 / 200, baseline=str(paths["binary"]))
+    with Sampler(monitor, rate=200, recorders=[diff]) as sampler:
+        time.sleep(0.3)
+    sampler.close()
+    assert (tmp_path / "diff.html").exists()
+
+
+def test_recorder_rejects_what_cannot_work(tmp_path):
+    assert guess_format("x.HTML") == "flamegraph"
+    assert guess_format(str(tmp_path)) == "heatmap"
+    with pytest.raises(SgrudError, match="--format"):
+        guess_format("x.foo")
+    with pytest.raises(SgrudError, match="task stacks"):
+        Recorder(str(tmp_path / "a.bin"), interval=0.01, mode="async")
+    with pytest.raises(SgrudError, match="baseline"):
+        Recorder(str(tmp_path / "a.json"), interval=0.01, baseline="old.bin")
+    with pytest.raises(SgrudError, match="does not exist"):
+        Recorder(str(tmp_path / "a.html"), interval=0.01, baseline=str(tmp_path / "old.bin"))
+    with pytest.raises(SgrudError, match="unknown format"):
+        Recorder(str(tmp_path / "a.html"), "svg", interval=0.01)

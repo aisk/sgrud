@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import os
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from .models import Frame, Process, Snapshot, Task, Thread
 
@@ -227,6 +227,18 @@ def format_snapshot(
     for section, err in snap.errors.items():
         lines.append(f"! {section}: {err}")
     return "\n".join(lines)
+
+
+def format_read_stats(stats: Mapping[str, int | float]) -> str:
+    """One line on what reading the target cost, from :meth:`Monitor.read_stats`."""
+    reads = int(stats.get("memory_reads", 0))
+    if not reads:
+        return ""
+    text = f"read {human_bytes(int(stats.get('memory_bytes_read', 0)))} in {reads:,} memory reads"
+    lookups = stats.get("frame_cache_hits", 0) + stats.get("frame_cache_misses", 0)
+    if lookups:
+        text += f", frame cache {stats.get('frame_cache_hit_rate', 0):.0f}% hits"
+    return text
 
 
 def format_hotspots(

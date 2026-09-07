@@ -38,6 +38,9 @@ sgrud profile PID                   lấy mẫu stack trong 5 s, in ra các hàm
 sgrud profile PID -d 30 --mode gil  lấy mẫu trong 30 s, chỉ đếm thread đang giữ GIL
 sgrud profile PID --mode async      lấy mẫu các task asyncio thay vì thread
 sgrud profile PID --folded          stack dạng gộp cho flamegraph.pl hoặc speedscope
+sgrud profile PID -o out.html       ghi flame graph, hoặc .json / .pstats / .txt / .jsonl / một thư mục
+sgrud profile PID -o out.bin        ghi lại cho `python -m profiling.sampling replay`
+sgrud PID --record out.bin          mở giao diện và ghi lại mọi mẫu nó lấy
 ```
 
 `--no-stacks`, `--no-tasks` và `--no-gc` bỏ bớt những phần bạn không cần
@@ -49,6 +52,10 @@ khỏi giao diện hoặc bản dump.
   ngủ cũng nặng ngang một thread đang bận.
 - **gil**: chỉ tính thread đang giữ GIL. Chế độ này trả lời câu hỏi "CPU
   đang đi đâu".
+- **cpu**: chỉ tính các thread mà hệ điều hành đang chạy trên một nhân, nên
+  mã C đã nhả GIL vẫn được tính còn thread đang chờ GIL thì không.
+- **exception**: chỉ tính các thread đang xử lý một ngoại lệ, cho thấy ngoại
+  lệ được ném ra ở đâu và đi bao xa trước khi bị bắt.
 - **async**: lấy mẫu các task asyncio thay vì stack của thread, vì một
   coroutine đang đứng chờ ở `await` không nằm trên stack của thread nào cả.
   Mỗi task lá trở thành một stack: các frame của chính nó, một dấu
@@ -56,6 +63,20 @@ khỏi giao diện hoặc bản dump.
   Mọi task đều được tính, dù đang chạy hay đang tạm dừng, nên chế độ này
   trả lời câu hỏi "các task của tôi đang chờ gì". Mỗi mẫu tốn thời gian hơn
   so với đọc một stack, nên tần suất thực tế sẽ thấp hơn.
+
+### Định dạng đầu ra
+
+`profile -o PATH` ghi các mẫu theo một định dạng của `profiling.sampling`
+trong thư viện chuẩn (trình phân tích Tachyon) thay vì in bảng. Phần mở rộng
+quyết định định dạng: `.html` là flame graph, `.json` là tài liệu Firefox
+Profiler, `.pstats` nạp được bằng `pstats.Stats`, `.txt` là stack dạng gộp,
+`.jsonl` mỗi dòng một mẫu và một thư mục sẽ nhận bản đồ nhiệt mã nguồn.
+`.bin` là định dạng nhị phân của Tachyon, sau này
+`python -m profiling.sampling replay` chuyển được sang bất kỳ định dạng nào
+khác. `--baseline old.bin` biến flame graph thành đồ thị so sánh với một bản
+ghi trước đó, còn `--opcodes` ghi lại lệnh bytecode của từng frame cho các
+định dạng hiển thị được nó. `sgrud PID --record out.bin` ghi tương tự ngay
+dưới giao diện, xuyên suốt các lần đổi chế độ.
 
 ### TUI
 
@@ -66,7 +87,7 @@ khỏi giao diện hoặc bản dump.
 | `+` / `-` | thay đổi khoảng làm mới |
 | `q` | thoát |
 | `f` | lọc theo thread (Hotspots và Flame) |
-| `m` | luân chuyển chế độ wall/gil/async (Hotspots và Flame) |
+| `m` | luân chuyển chế độ lấy mẫu (Hotspots và Flame) |
 | `c` | xóa các mẫu (Hotspots và Flame) |
 | `s` | đổi thứ tự sắp xếp self/total (Hotspots) |
 | `enter` / `backspace` / `esc` | phóng to / thu nhỏ / đặt lại (Flame) |
@@ -137,8 +158,12 @@ và đưa kết quả vào bộ tổng hợp `Hotspots`:
 ```python
 from sgrud.sampler import Sampler
 
-with Sampler(monitor, rate=500, mode="gil") as sampler:
+from sgrud.export import Recorder
+
+flame = Recorder("profile.html", interval=1 / 500)
+with Sampler(monitor, rate=500, mode="gil", recorders=[flame]) as sampler:
     time.sleep(5)
+sampler.close()  # writes profile.html
 for row in sampler.hotspots.rows(sort="self", limit=10):
     print(row.self_percent, row.funcname, row.filename)
 tree = sampler.hotspots.call_tree()  # merged call tree, one child per thread

@@ -25,10 +25,19 @@ GC_KEY: FunctionKey = ("<GC>", "~")
 
 #: ``wall`` counts every thread that has a Python stack. ``gil`` counts only
 #: the thread holding the GIL, which is where CPU time goes in CPython.
-#: ``async`` samples asyncio tasks instead of threads: every task counts,
-#: suspended ones included, with its coroutine stack joined to the stacks of
-#: the tasks awaiting it.
-MODES = ("wall", "gil", "async")
+#: ``cpu`` counts threads the OS has on a core, so C code that released the
+#: GIL still counts and a thread waiting for the GIL does not.
+#: ``exception`` counts only threads handling an exception, to show where
+#: exceptions are raised and caught. ``async`` samples asyncio tasks
+#: instead of threads: every task counts, suspended ones included, with
+#: its coroutine stack joined to the stacks of the tasks awaiting it.
+MODES = ("wall", "gil", "cpu", "exception", "async")
+
+_MODE_STATUS = {
+    "gil": ThreadStatus.HAS_GIL,
+    "cpu": ThreadStatus.ON_CPU,
+    "exception": ThreadStatus.HAS_EXCEPTION,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,9 +142,8 @@ class Hotspots:
             self.last_sample_at = None
 
     def _wanted(self, status: object) -> bool:
-        if self.mode == "gil":
-            return bool(ThreadStatus(status) & ThreadStatus.HAS_GIL)
-        return True
+        flag = _MODE_STATUS.get(self.mode)
+        return flag is None or bool(ThreadStatus(status) & flag)
 
     def add(self, stacks: Mapping[int, tuple[int, object, tuple[Frame, ...]]]) -> None:
         """Record one sample from :meth:`Monitor.sample_stacks`."""

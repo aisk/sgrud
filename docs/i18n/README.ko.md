@@ -37,6 +37,9 @@ sgrud profile PID                   5초 동안 스택을 샘플링하고 가장
 sgrud profile PID -d 30 --mode gil  30초 동안 샘플링하되 GIL을 쥔 스레드만 집계
 sgrud profile PID --mode async      스레드 대신 asyncio 태스크를 샘플링
 sgrud profile PID --folded          flamegraph.pl이나 speedscope용 접힌 스택
+sgrud profile PID -o out.html       플레임 그래프 저장 (.json / .pstats / .txt / .jsonl / 디렉터리도 가능)
+sgrud profile PID -o out.bin        `python -m profiling.sampling replay`용으로 기록
+sgrud PID --record out.bin          인터페이스를 열면서 모든 샘플을 기록
 ```
 
 `--no-stacks`, `--no-tasks`, `--no-gc`를 사용하면 필요 없는 섹션을 인터페이스나
@@ -47,12 +50,29 @@ sgrud profile PID --folded          flamegraph.pl이나 speedscope용 접힌 스
 - **wall**: Python 스택을 가진 모든 스레드를 집계하므로 잠들어 있는 스레드도
   바쁜 스레드와 같은 비중을 가집니다.
 - **gil**: GIL을 쥔 스레드만 집계합니다. "CPU가 어디에 쓰이는가"에 답합니다.
+- **cpu**: OS가 코어 위에서 실행 중인 스레드만 집계합니다. GIL을 놓은 C 코드도
+  집계되고 GIL을 기다리는 스레드는 집계되지 않습니다.
+- **exception**: 예외를 처리 중인 스레드만 집계합니다. 예외가 어디서 발생해
+  잡히기 전까지 얼마나 멀리 전파되는지 보여 줍니다.
 - **async**: 스레드 스택 대신 asyncio 태스크를 샘플링합니다. `await`에서 멈춰
   있는 코루틴은 어떤 스레드의 스택에도 없기 때문입니다. 각 리프 태스크가 하나의
   스택이 되며, 자신의 프레임, `<task NAME>` 마커, 그 다음 루트까지 이 태스크를
   기다리는 각 태스크의 프레임 순으로 이어집니다. 실행 중이든 중단 상태이든 모든
   태스크를 집계하므로 "내 태스크들이 무엇을 기다리고 있는가"에 답합니다. 스택을
   읽는 것보다 샘플당 비용이 크므로 실제 달성되는 샘플링 속도는 더 낮습니다.
+
+### 출력 형식
+
+`profile -o PATH`는 표를 출력하는 대신 표준 라이브러리 `profiling.sampling`
+(Tachyon 프로파일러)의 형식으로 샘플을 씁니다. 확장자가 형식을 정합니다.
+`.html`은 플레임 그래프, `.json`은 Firefox Profiler 문서, `.pstats`는
+`pstats.Stats`로 읽을 수 있고, `.txt`는 접힌 스택, `.jsonl`은 한 줄에 샘플
+하나, 디렉터리는 소스 히트맵이 됩니다. `.bin`은 Tachyon의 바이너리 형식으로,
+나중에 `python -m profiling.sampling replay`로 다른 어떤 형식으로든 변환할 수
+있습니다. `--baseline old.bin`은 이전 기록과 비교하는 차분 플레임 그래프를
+만들고, `--opcodes`는 지원하는 형식을 위해 각 프레임의 바이트코드 명령을
+기록합니다. `sgrud PID --record out.bin`은 인터페이스 뒤에서 같은 기록을 하며
+모드를 바꿔도 이어집니다.
 
 ### TUI
 
@@ -63,7 +83,7 @@ sgrud profile PID --folded          flamegraph.pl이나 speedscope용 접힌 스
 | `+` / `-` | 새로 고침 간격 변경 |
 | `q` | 종료 |
 | `f` | 스레드 필터 (Hotspots 및 Flame) |
-| `m` | wall/gil/async 모드 순환 (Hotspots 및 Flame) |
+| `m` | 샘플링 모드 순환 (Hotspots 및 Flame) |
 | `c` | 샘플 지우기 (Hotspots 및 Flame) |
 | `s` | self/total 정렬 전환 (Hotspots) |
 | `enter` / `backspace` / `esc` | 확대 / 축소 / 초기화 (Flame) |
@@ -127,8 +147,12 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
 ```python
 from sgrud.sampler import Sampler
 
-with Sampler(monitor, rate=500, mode="gil") as sampler:
+from sgrud.export import Recorder
+
+flame = Recorder("profile.html", interval=1 / 500)
+with Sampler(monitor, rate=500, mode="gil", recorders=[flame]) as sampler:
     time.sleep(5)
+sampler.close()  # writes profile.html
 for row in sampler.hotspots.rows(sort="self", limit=10):
     print(row.self_percent, row.funcname, row.filename)
 tree = sampler.hotspots.call_tree()  # merged call tree, one child per thread

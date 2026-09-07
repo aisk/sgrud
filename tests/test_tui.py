@@ -131,8 +131,9 @@ async def test_tui_reports_process_exit():
         proc.wait()
 
 
-async def test_tui_hotspots_tab(monitor):
-    app = SgrudApp(monitor, interval=0.2, sample_rate=200)
+async def test_tui_hotspots_tab(monitor, tmp_path):
+    record = tmp_path / "session.bin"
+    app = SgrudApp(monitor, interval=0.2, sample_rate=200, record=str(record))
     async with app.run_test(size=(120, 40)) as pilot:
         await asyncio.sleep(0.8)
         await pilot.pause()
@@ -168,8 +169,12 @@ async def test_tui_hotspots_tab(monitor):
         await pilot.press("c")
         await pilot.pause()
         assert app.hotspots.samples < before / 2
+        await pilot.press("m")
+        assert app.hotspots.mode == "gil"
         await pilot.press("q")
     assert not app.sampler.running
+    # The recording survives the mode switch and is closed on exit.
+    assert record.stat().st_size > 0
 
 
 async def test_tui_flame_tab(monitor):

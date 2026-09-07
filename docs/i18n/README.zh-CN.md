@@ -35,6 +35,9 @@ sgrud profile PID                   采样调用栈 5 秒，打印最热的函�
 sgrud profile PID -d 30 --mode gil  采样 30 秒，只统计持有 GIL 的线程
 sgrud profile PID --mode async      采样 asyncio 任务而不是线程
 sgrud profile PID --folded          输出折叠栈，供 flamegraph.pl 或 speedscope 使用
+sgrud profile PID -o out.html       写出火焰图，也可以是 .json / .pstats / .txt / .jsonl / 目录
+sgrud profile PID -o out.bin        录制成 `python -m profiling.sampling replay` 可读的格式
+sgrud PID --record out.bin          打开界面的同时录制每一个样本
 ```
 
 `--no-stacks`、`--no-tasks` 和 `--no-gc` 可以从界面或 dump 输出中去掉你不需要的部分。
@@ -44,11 +47,25 @@ sgrud profile PID --folded          输出折叠栈，供 flamegraph.pl 或 spee
 - **wall**：所有拥有 Python 调用栈的线程都计入，因此一个休眠线程和一个忙碌线程的
   权重相同。
 - **gil**：只计入持有 GIL 的线程。它回答的是“CPU 时间花在了哪里”。
+- **cpu**：只计入操作系统正调度在核上的线程，所以释放了 GIL 的 C 代码仍然计入，
+  而等待 GIL 的线程不计入。
+- **exception**：只计入正在处理异常的线程，用来看异常在哪里抛出、传播多远才被捕获。
 - **async**：采样 asyncio 任务而不是线程栈，因为停在 `await` 上的协程不在任何线程的
   栈上。每个叶子任务对应一个栈：先是它自己的帧，然后是一个 `<task NAME>` 标记，
   再往上是每个等待它的任务的帧，直到根任务。无论运行中还是挂起的任务都会计入，
   所以它回答的是“我的任务都在等什么”。这种模式每次采样比读取一个栈更慢，
   因此实际采样率会偏低。
+
+### 输出格式
+
+`profile -o PATH` 把样本写成标准库 `profiling.sampling`（Tachyon 分析器）的格式，
+而不是打印表格。扩展名决定格式：`.html` 是火焰图，`.json` 是 Firefox Profiler
+文档，`.pstats` 可用 `pstats.Stats` 加载，`.txt` 是折叠栈，`.jsonl` 每行一个样本，
+目录则生成源码热力图。`.bin` 是 Tachyon 的二进制格式，之后可以用
+`python -m profiling.sampling replay` 转成其他任何格式。`--baseline old.bin`
+让火焰图变成与早前录制的差分图，`--opcodes` 为支持的格式记录每个帧当前的
+字节码指令。`sgrud PID --record out.bin` 在界面运行期间做同样的录制，切换模式
+也不会中断。
 
 ### TUI
 
@@ -59,7 +76,7 @@ sgrud profile PID --folded          输出折叠栈，供 flamegraph.pl 或 spee
 | `+` / `-` | 调整刷新间隔 |
 | `q` | 退出 |
 | `f` | 线程过滤（Hotspots 和 Flame） |
-| `m` | 循环切换 wall/gil/async 模式（Hotspots 和 Flame） |
+| `m` | 循环切换采样模式（Hotspots 和 Flame） |
 | `c` | 清空采样（Hotspots 和 Flame） |
 | `s` | 切换 self/total 排序（Hotspots） |
 | `enter` / `backspace` / `esc` | 放大 / 缩小 / 重置（Flame） |
@@ -123,8 +140,12 @@ CPU 百分比需要两次快照才能算出，所以第一次快照中报告为 
 ```python
 from sgrud.sampler import Sampler
 
-with Sampler(monitor, rate=500, mode="gil") as sampler:
+from sgrud.export import Recorder
+
+flame = Recorder("profile.html", interval=1 / 500)
+with Sampler(monitor, rate=500, mode="gil", recorders=[flame]) as sampler:
     time.sleep(5)
+sampler.close()  # writes profile.html
 for row in sampler.hotspots.rows(sort="self", limit=10):
     print(row.self_percent, row.funcname, row.filename)
 tree = sampler.hotspots.call_tree()  # merged call tree, one child per thread

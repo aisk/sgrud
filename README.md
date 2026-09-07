@@ -40,6 +40,9 @@ sgrud profile PID                   sample stacks for 5 s, print the hottest fun
 sgrud profile PID -d 30 --mode gil  sample for 30 s, count only the thread holding the GIL
 sgrud profile PID --mode async      sample asyncio tasks instead of threads
 sgrud profile PID --folded          collapsed stacks for flamegraph.pl or speedscope
+sgrud profile PID -o out.html       write a flame graph, or .json / .pstats / .txt / .jsonl / a directory
+sgrud profile PID -o out.bin        record for `python -m profiling.sampling replay`
+sgrud PID --record out.bin          the interface, recording every sample it takes
 ```
 
 `--no-stacks`, `--no-tasks` and `--no-gc` drop sections you do not need
@@ -50,12 +53,30 @@ from the interface or the dump.
 - **wall**: every thread with a Python stack counts, so a sleeping thread
   weighs as much as a busy one.
 - **gil**: only the GIL holder counts. This answers "where does the CPU go".
+- **cpu**: only threads the OS has on a core count, so C code that released
+  the GIL still counts and a thread waiting for the GIL does not.
+- **exception**: only threads handling an exception count, which shows
+  where exceptions are raised and how far they travel before being caught.
 - **async**: samples asyncio tasks instead of thread stacks, since a
   coroutine parked in an `await` is on no thread's stack. Each leaf task
   becomes one stack: its own frames, a `<task NAME>` marker, then the frames
   of each task awaiting it up to the root. Every task counts, running or
   suspended, so this answers "what are my tasks waiting on". It is slower
   per sample than reading a stack, so expect a lower achieved rate.
+
+### Output formats
+
+`profile -o PATH` writes the samples in a format of the standard library's
+`profiling.sampling` (the Tachyon profiler) instead of printing a table.
+The extension picks the format: `.html` is a flame graph, `.json` a Firefox
+Profiler document, `.pstats` loads into `pstats.Stats`, `.txt` is collapsed
+stacks, `.jsonl` one sample per line and a directory gets a source heat map.
+`.bin` is Tachyon's binary format, which
+`python -m profiling.sampling replay` converts into any of the others later.
+`--baseline old.bin` makes the flame graph a differential one against an
+earlier recording, and `--opcodes` records the bytecode instruction of
+every frame for the formats that show it. `sgrud PID --record out.bin`
+does the same recording under the interface, across mode switches.
 
 ### TUI
 
@@ -66,7 +87,7 @@ from the interface or the dump.
 | `+` / `-` | change the refresh interval |
 | `q` | quit |
 | `f` | thread filter (Hotspots and Flame) |
-| `m` | cycle wall/gil/async mode (Hotspots and Flame) |
+| `m` | cycle the sampling mode (Hotspots and Flame) |
 | `c` | clear samples (Hotspots and Flame) |
 | `s` | toggle self/total ordering (Hotspots) |
 | `enter` / `backspace` / `esc` | zoom in / out / reset (Flame) |
@@ -139,8 +160,12 @@ thread and feeds a `Hotspots` aggregator:
 ```python
 from sgrud.sampler import Sampler
 
-with Sampler(monitor, rate=500, mode="gil") as sampler:
+from sgrud.export import Recorder
+
+flame = Recorder("profile.html", interval=1 / 500)
+with Sampler(monitor, rate=500, mode="gil", recorders=[flame]) as sampler:
     time.sleep(5)
+sampler.close()  # writes profile.html
 for row in sampler.hotspots.rows(sort="self", limit=10):
     print(row.self_percent, row.funcname, row.filename)
 tree = sampler.hotspots.call_tree()  # merged call tree, one child per thread

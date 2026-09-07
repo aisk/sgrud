@@ -7,6 +7,7 @@ sgrud dump PID                one text snapshot
 sgrud dump PID -n 0.5         keep printing snapshots every 0.5 s
 sgrud dump PID --json         JSON lines instead of text
 sgrud profile PID -d 5        sample stacks for 5 s and print the hottest functions
+sgrud profile PID -o out.html sample and write a flame graph (or .bin, .json, .pstats, ...)
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from typing import TYPE_CHECKING
 
 from . import __name__ as _pkg
 from .errors import SgrudError
+from .export import FORMATS
 from .format import format_snapshot
 from .monitor import Monitor
 from .profile import MODES
@@ -51,7 +53,8 @@ def _add_mode(parser: argparse.ArgumentParser, help: str) -> None:
         "--mode",
         choices=MODES,
         default="wall",
-        help=help + ": every thread (wall), only the GIL holder (gil) or asyncio tasks (async)",
+        help=help + ": every thread (wall), the GIL holder (gil), threads on a core (cpu), "
+        "threads handling an exception (exception) or asyncio tasks (async)",
     )
 
 
@@ -76,6 +79,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="background stack samples per second for the Hotspots tab, 0 to disable",
     )
     _add_mode(top, "initial hotspot mode, cycle with `m` in the TUI")
+    top.add_argument(
+        "--record",
+        metavar="FILE.bin",
+        help="also write every sample to a binary profile that "
+        "`python -m profiling.sampling replay` can convert",
+    )
     top.add_argument(
         "--web",
         action="store_true",
@@ -114,6 +123,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="print collapsed stacks for flamegraph.pl or speedscope instead of a table",
     )
     profile.add_argument("--json", action="store_true", help="emit the hotspot table as JSON")
+    profile.add_argument(
+        "-o",
+        "--output",
+        metavar="PATH",
+        help="write the samples to PATH instead of printing a table. The extension picks "
+        "the format: .html flame graph, .json Firefox Profiler, .pstats, .txt collapsed "
+        "stacks, .jsonl, .bin binary for `python -m profiling.sampling replay`, "
+        "a directory for a source heat map",
+    )
+    profile.add_argument(
+        "--format", choices=tuple(FORMATS), help="output format when the extension does not say"
+    )
+    profile.add_argument(
+        "--baseline",
+        metavar="FILE.bin",
+        help="an earlier .bin recording to compare against, making the flame graph differential",
+    )
+    profile.add_argument(
+        "--opcodes",
+        action="store_true",
+        help="record the bytecode instruction of every frame (gecko, heatmap and binary use it)",
+    )
     profile.add_argument("--no-native", action="store_true", help="hide <native> marker frames")
     return parser
 
@@ -181,10 +212,27 @@ def _dump(args: argparse.Namespace) -> int:
 
 
 def _profile(args: argparse.Namespace) -> int:
+    from .export import Recorder
     from .sampler import Sampler
 
     try:
-        monitor = open_monitor(args.target, args.command_argv, native_frames=not args.no_native)
+        recorders = []
+        if args.output:
+            recorders.append(
+                Recorder(
+                    args.output,
+                    args.format,
+                    interval=1 / args.rate,
+                    mode=args.mode,
+                    baseline=args.baseline,
+                )
+            )
+        monitor = open_monitor(
+            args.target,
+            args.command_argv,
+            native_frames=not args.no_native,
+            opcodes=args.opcodes,
+        )
     except SgrudError as e:
         print(f"sgrud: {e}", file=sys.stderr)
         return 1
@@ -195,12 +243,30 @@ def _profile(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-        sampler = Sampler(monitor, rate=args.rate, mode=args.mode)
+        sampler = Sampler(monitor, rate=args.rate, mode=args.mode, recorders=recorders)
         with sampler:
             deadline = time.monotonic() + args.duration
             while time.monotonic() < deadline and sampler.exited is None:
                 time.sleep(0.05)
-        return _print_hotspots(monitor, sampler, args)
+        sampler.close()
+        if not recorders:
+            return _print_hotspots(monitor, sampler, args)
+        for recorder in recorders:
+            print(f"{recorder.format} written to {recorder.path}, {recorder.samples} samples")
+        _print_footer(monitor, sampler)
+        return 0
+
+
+def _print_footer(monitor: Monitor, sampler: Sampler) -> None:
+    from .format import format_read_stats
+
+    if sampler.errors:
+        print(f"({sampler.errors} samples failed, last: {sampler.last_error})")
+    stats = format_read_stats(monitor.read_stats(sampler.hotspots.mode))
+    if stats:
+        print(stats)
+    if sampler.exited is not None:
+        print(f"sgrud: {sampler.exited}", file=sys.stderr)
 
 
 def _print_hotspots(monitor: Monitor, sampler: Sampler, args: argparse.Namespace) -> int:
@@ -233,8 +299,8 @@ def _print_hotspots(monitor: Monitor, sampler: Sampler, args: argparse.Namespace
                 hot.rows(sort=args.sort), samples=hot.samples, rate=hot.rate(), mode=hot.mode
             )
         )
-        if sampler.errors:
-            print(f"({sampler.errors} samples failed, last: {sampler.last_error})")
+        _print_footer(monitor, sampler)
+        return 0
     if sampler.exited is not None:
         print(f"sgrud: {sampler.exited}", file=sys.stderr)
     return 0
@@ -270,6 +336,7 @@ def _top(args: argparse.Namespace) -> int:
         gc=not args.no_gc,
         sample_rate=args.rate,
         sample_mode=args.mode,
+        record=args.record,
     )
 
 

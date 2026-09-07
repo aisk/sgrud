@@ -39,6 +39,7 @@ from textual.widgets import (
 )
 
 from .errors import ProcessExited, SgrudError
+from .export import Recorder
 from .format import (
     human_bytes,
     human_count,
@@ -444,7 +445,7 @@ class SgrudApp(App[int]):
         Binding("f", "focus_filter", "Filter"),
         Binding("s", "toggle_sort", "Sort self/total"),
         Binding("c", "clear_hotspots", "Clear samples"),
-        Binding("m", "toggle_mode", "wall/gil/async"),
+        Binding("m", "toggle_mode", "Mode"),
     ]
 
     #: The widget that gets focus when a tab becomes active.
@@ -466,15 +467,18 @@ class SgrudApp(App[int]):
         gc: bool = True,
         sample_rate: float = 100.0,
         sample_mode: str = "wall",
+        record: str | None = None,
     ):
+        """``record`` is a path for a binary recording of every sample taken."""
         super().__init__()
         self.monitor = monitor
         self.hotspots = Hotspots(sample_mode)
-        self.sampler = (
-            Sampler(monitor, self.hotspots, rate=sample_rate)
-            if sample_rate > 0 and monitor.limited is None
-            else None
-        )
+        self.sampler: Sampler | None = None
+        if sample_rate > 0 and monitor.limited is None:
+            recorders = []
+            if record:
+                recorders.append(Recorder(record, "binary", interval=1 / sample_rate))
+            self.sampler = Sampler(monitor, self.hotspots, rate=sample_rate, recorders=recorders)
         self.hot_sort = "self"
         self.hot_thread: int | None = None
         self._hot_options: tuple[int, ...] = ()
@@ -578,7 +582,7 @@ class SgrudApp(App[int]):
 
     def on_unmount(self) -> None:
         if self.sampler is not None:
-            self.sampler.stop()
+            self.sampler.close()
 
     # -- actions -------------------------------------------------------
 

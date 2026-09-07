@@ -22,6 +22,16 @@ def idle_loop():
         time.sleep(0.2)
 
 
+def except_loop():
+    # Sleeps inside an exception handler, so exception mode sampling has
+    # something to find.
+    try:
+        raise ValueError("handled forever")
+    except ValueError:
+        while True:
+            time.sleep(0.2)
+
+
 async def leaf(n):
     await asyncio.sleep(3600)
 
@@ -35,6 +45,7 @@ async def main():
     tasks = [asyncio.create_task(branch(i), name=f"branch-{i}") for i in range(3)]  # noqa: F841
     threading.Thread(target=busy_loop, name="busy", daemon=True).start()
     threading.Thread(target=idle_loop, name="idle", daemon=True).start()
+    threading.Thread(target=except_loop, name="except", daemon=True).start()
     await asyncio.sleep(0.05)
     print("READY", flush=True)
     while True:
