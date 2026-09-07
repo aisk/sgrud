@@ -278,3 +278,44 @@ def test_allow_ptrace_lets_a_sibling_inspect_a_run_target():
     assert sibling.returncode == 0, sibling.stderr
     assert "limited mode" not in sibling.stderr
     assert "busy_loop" in sibling.stdout
+
+
+def test_children_are_listed_and_marked_python():
+    import psutil
+    from conftest import spawn_target
+
+    from sgrud.format import format_children
+
+    proc = spawn_target("--children")
+    try:
+        with Monitor.attach(proc.pid) as m:
+            deadline = time.monotonic() + 5
+            while True:
+                snap = m.snapshot(stacks=False, tasks=False, gc=False)
+                kids = {c.pid: c for c in snap.children}
+                pythons = [c for c in kids.values() if c.python]
+                if len(kids) >= 3 and len(pythons) >= 2 or time.monotonic() > deadline:
+                    break
+                time.sleep(0.1)
+            assert "children" not in snap.errors, snap.errors
+            assert len(kids) >= 3, kids
+            assert len(pythons) == 2, kids
+            others = [c for c in kids.values() if not c.python]
+            assert others and all(c.rss > 0 for c in kids.values())
+            # The grandchild hangs off the child, both under the target.
+            grandchild = next(c for c in pythons if c.parent_pid != proc.pid)
+            assert grandchild.parent_pid in kids and kids[grandchild.parent_pid].python
+            assert list(kids).index(grandchild.parent_pid) < list(kids).index(grandchild.pid)
+            time.sleep(0.15)
+            again = m.snapshot(stacks=False, tasks=False, gc=False)
+            assert all(c.cpu_percent is not None for c in again.children)
+            lines = format_children(again.children)
+            assert len(lines) == len(again.children)
+            assert any(line.startswith("    [") for line in lines)  # the grandchild is indented
+            assert m.snapshot(children=False).children == ()
+    finally:
+        # The children would outlive the target and keep its stdout pipe open.
+        for child in psutil.Process(proc.pid).children(recursive=True):
+            child.kill()
+        proc.kill()
+        proc.wait()

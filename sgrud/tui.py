@@ -421,7 +421,9 @@ class SgrudApp(App[int]):
     #flame-scroll { height: 1fr; align-vertical: bottom; }
     #flame-status { height: 2; padding: 0 1; border-top: solid $secondary; }
     .hist-label { color: $text-muted; }
-    #procinfo { padding: 1; }
+    #procinfo { padding: 1; height: auto; }
+    #children-label { padding: 0 1; color: $text-muted; }
+    #children-table { height: 1fr; }
     """
     # Focus always lives in the active tab's content, never on the tab bar,
     # so the arrow keys drive tables, trees and the flame graph while tab
@@ -453,6 +455,7 @@ class SgrudApp(App[int]):
         "threads": "#threads-table",
         "tasks": "#tasks-tree",
         "gc": "#gc-table",
+        "process": "#children-table",
         "hotspots": "#hot-table",
         "flame": "#flame-graph",
     }
@@ -465,6 +468,7 @@ class SgrudApp(App[int]):
         stacks: bool = True,
         tasks: bool = True,
         gc: bool = True,
+        children: bool = True,
         sample_rate: float = 100.0,
         sample_mode: str = "wall",
         record: str | None = None,
@@ -483,7 +487,7 @@ class SgrudApp(App[int]):
         self.hot_thread: int | None = None
         self._hot_options: tuple[int, ...] = ()
         self.interval = interval
-        self.sections = dict(stacks=stacks, tasks=tasks, gc=gc)
+        self.sections = dict(stacks=stacks, tasks=tasks, gc=gc, children=children)
         self.paused = False
         #: Set once the target has gone away. The last snapshot is kept.
         self.exited: ProcessExited | None = None
@@ -543,6 +547,8 @@ class SgrudApp(App[int]):
                 yield Label("page faults /s", classes="hist-label")
                 yield Sparkline([], id="faulthist")
                 yield Static("", id="procinfo")
+                yield Static("", id="children-label")
+                yield DataTable(id="children-table", cursor_type="row", zebra_stripes=True)
             with TabPane("Hotspots", id="hotspots"):
                 with Horizontal(id="hot-bar"):
                     yield ThreadFilter(
@@ -572,6 +578,8 @@ class SgrudApp(App[int]):
         hist.add_columns("gen", "#", "ago", "duration", "collected", "survivors", "objects")
         hot = self.query_one("#hot-table", DataTable)
         hot.add_columns("self%", "total%", "self", "total", "function", "file")
+        kids = self.query_one("#children-table", DataTable)
+        kids.add_columns("pid", "kind", "state", "cpu%", "rss", "threads", "command")
         self.query_one("#flame-scroll", VerticalScroll).anchor()
         self.query_one(Tabs).can_focus = False
         self._focus_content()
@@ -923,6 +931,34 @@ class SgrudApp(App[int]):
             cells = [f"{name} {value}".strip() for name, value in pairs]
             lines.append(f"{label:<8} " + "   ".join(cells))
         self.query_one("#procinfo", Static).update("\n".join(lines))
+        self._update_children(snap)
+
+    def _update_children(self, snap: Snapshot) -> None:
+        label = self.query_one("#children-label", Static)
+        table = self.query_one("#children-table", DataTable)
+        if not snap.children:
+            label.update(Text("no child processes", "dim"))
+            table.display = False
+            return
+        pythons = sum(c.python for c in snap.children)
+        label.update(f"children: {len(snap.children)}, {pythons} python")
+        table.display = True
+        depth = {c.pid: 0 for c in snap.children}
+        for c in snap.children:
+            depth[c.pid] = depth.get(c.parent_pid, -1) + 1
+        table.clear()
+        for c in snap.children:
+            cmd = " ".join(c.cmdline) or c.name or "?"
+            table.add_row(
+                str(c.pid),
+                Text("python", "cyan") if c.python else Text("other", "dim"),
+                c.state or "?",
+                percent(c.cpu_percent),
+                human_bytes(c.rss),
+                str(c.num_threads),
+                "  " * depth[c.pid] + cmd,
+                key=str(c.pid),
+            )
 
     def _sync_thread_filters(self, snap: Snapshot) -> None:
         tids = tuple(t.tid for t in snap.threads)

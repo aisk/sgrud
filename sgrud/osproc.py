@@ -83,6 +83,21 @@ class ProcessStat:
 
 
 @dataclass(frozen=True, slots=True)
+class ChildStat:
+    pid: int
+    ppid: int
+    name: str
+    cmdline: tuple[str, ...]
+    state: str
+    rss: int
+    num_threads: int
+    utime: float
+    stime: float
+    #: Epoch seconds at which the child started.
+    start_time: float
+
+
+@dataclass(frozen=True, slots=True)
 class ThreadStat:
     tid: int
     name: str
@@ -183,6 +198,41 @@ class ProcessStats:
                 value = 0
             self._uss = (now, value)
         return value
+
+    def children(self) -> list[ChildStat]:
+        """Every live descendant, parents before children. Zombies are left out."""
+        try:
+            procs = self._proc.children(recursive=True)
+        except psutil.NoSuchProcess as e:
+            raise ProcessLookupError(self.pid) from e
+        out: list[ChildStat] = []
+        for p in procs:
+            try:
+                with p.oneshot():
+                    state = p.status()
+                    if state == psutil.STATUS_ZOMBIE:
+                        continue
+                    cpu = p.cpu_times()
+                    out.append(
+                        ChildStat(
+                            pid=p.pid,
+                            ppid=p.ppid(),
+                            name=_optional(p.name, ""),
+                            cmdline=tuple(_optional(p.cmdline, ())),
+                            state=state,
+                            rss=p.memory_info().rss,
+                            num_threads=_optional(p.num_threads, 0),
+                            utime=cpu.user,
+                            stime=cpu.system,
+                            start_time=p.create_time(),
+                        )
+                    )
+            except psutil.NoSuchProcess, psutil.ZombieProcess:
+                continue
+            except psutil.AccessDenied:
+                # A setuid child, say. Still worth listing.
+                out.append(ChildStat(p.pid, self.pid, "", (), "", 0, 0, 0.0, 0.0, 0.0))
+        return out
 
     def threads(self) -> dict[int, ThreadStat]:
         """OS threads keyed by the id ``_remote_debugging`` uses for them.

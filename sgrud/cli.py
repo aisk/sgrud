@@ -42,6 +42,7 @@ def _add_sections(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-stacks", action="store_true", help="skip stack traces")
     parser.add_argument("--no-tasks", action="store_true", help="skip asyncio tasks")
     parser.add_argument("--no-gc", action="store_true", help="skip GC statistics")
+    parser.add_argument("--no-children", action="store_true", help="skip child processes")
     parser.add_argument("--no-native", action="store_true", help="hide <native> marker frames")
 
 
@@ -162,7 +163,12 @@ def open_monitor(target: str, command: Sequence[str], **options) -> Monitor:
 
 
 def _dump(args: argparse.Namespace) -> int:
-    sections = dict(stacks=not args.no_stacks, tasks=not args.no_tasks, gc=not args.no_gc)
+    sections = dict(
+        stacks=not args.no_stacks,
+        tasks=not args.no_tasks,
+        gc=not args.no_gc,
+        children=not args.no_children,
+    )
     try:
         monitor = open_monitor(args.target, args.command_argv, native_frames=not args.no_native)
     except SgrudError as e:
@@ -179,7 +185,9 @@ def _dump(args: argparse.Namespace) -> int:
             if args.interval is None:
                 # A second sample a moment later gives meaningful CPU, page
                 # fault and GC rates.
-                monitor.snapshot(stacks=False, tasks=False, gc=sections["gc"])
+                monitor.snapshot(
+                    stacks=False, tasks=False, gc=sections["gc"], children=sections["children"]
+                )
                 time.sleep(0.1)
                 snaps = iter([monitor.snapshot(**sections)])
             else:
@@ -196,6 +204,7 @@ def _dump(args: argparse.Namespace) -> int:
                             frames=sections["stacks"],
                             tasks=sections["tasks"],
                             gc=sections["gc"],
+                            children=sections["children"],
                             max_frames=args.max_frames,
                         ),
                         flush=True,
@@ -334,6 +343,7 @@ def _top(args: argparse.Namespace) -> int:
         stacks=not args.no_stacks,
         tasks=not args.no_tasks,
         gc=not args.no_gc,
+        children=not args.no_children,
         sample_rate=args.rate,
         sample_mode=args.mode,
         record=args.record,

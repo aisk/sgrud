@@ -14,6 +14,7 @@ Quick start::
 from .errors import AttachError, NotSupported, ProcessExited, SgrudError
 from .models import (
     Awaiter,
+    ChildProcess,
     Frame,
     GCCollection,
     GCGeneration,
@@ -30,6 +31,7 @@ from .monitor import Monitor
 __all__ = [
     "AttachError",
     "Awaiter",
+    "ChildProcess",
     "Frame",
     "GCCollection",
     "GCGeneration",

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from . import osproc
 from .errors import AttachError, ProcessExited
-from .models import GCGeneration, Process, Snapshot, Task, Thread, ThreadStatus
+from .models import ChildProcess, GCGeneration, Process, Snapshot, Task, Thread, ThreadStatus
 from .remote import (
     UNWINDER_MODES,
     GCRecord,
@@ -19,6 +19,7 @@ from .remote import (
     access_hint,
     build_gc,
     interpreter_pid,
+    is_python_process,
 )
 
 #: Collections kept per generation across snapshots.
@@ -144,6 +145,10 @@ class Monitor:
         )
         self._proc_cpu: _CpuSample | None = None
         self._thread_cpu: dict[int, _CpuSample] = {}
+        self._child_cpu: dict[int, _CpuSample] = {}
+        # Whether a child is a CPython process. A fresh interpreter says no
+        # until it has mapped its runtime, so only a yes is final.
+        self._child_python: dict[int, bool] = {}
         self._faults: _RateSample | None = None
         self._gc = _GCTracker()
         try:
@@ -332,8 +337,15 @@ class Monitor:
 
     # -- sampling ------------------------------------------------------
 
-    def _cpu_percent(self, key: int | None, now: float, cpu_seconds: float) -> float | None:
-        store = self._thread_cpu
+    def _cpu_percent(
+        self,
+        key: int | None,
+        now: float,
+        cpu_seconds: float,
+        store: dict[int, _CpuSample] | None = None,
+    ) -> float | None:
+        if store is None:
+            store = self._thread_cpu
         prev = self._proc_cpu if key is None else store.get(key)
         sample = _CpuSample(now, cpu_seconds)
         if key is None:
@@ -350,6 +362,7 @@ class Monitor:
         stacks: bool = True,
         tasks: bool = True,
         gc: bool = True,
+        children: bool = True,
     ) -> Snapshot:
         """Collect one snapshot. Sections that fail are reported in ``errors``."""
         self._check_alive()
@@ -462,14 +475,58 @@ class Monitor:
             except Exception as e:
                 errors["gc"] = f"{type(e).__name__}: {e}"
 
+        child_list: tuple[ChildProcess, ...] = ()
+        if children:
+            try:
+                child_list = self._children(now)
+            except ProcessLookupError as e:
+                raise ProcessExited(self.pid) from e
+            except Exception as e:
+                errors["children"] = f"{type(e).__name__}: {e}"
+
         return Snapshot(
             timestamp=time.time(),
             process=process,
             threads=tuple(threads),
             tasks=task_list,
             gc=gc_list,
+            children=child_list,
             errors=errors,
         )
+
+    def _children(self, now: float) -> tuple[ChildProcess, ...]:
+        stats = self._stats.children()
+        seen = {c.pid for c in stats}
+        for gone in set(self._child_cpu) - seen:
+            del self._child_cpu[gone]
+        for gone in set(self._child_python) - seen:
+            del self._child_python[gone]
+        out: list[ChildProcess] = []
+        for c in stats:
+            python = self._child_python.get(c.pid, False)
+            if not python:
+                # Without memory access fall back to the executable's name.
+                python = is_python_process(c.pid) or (
+                    self.limited is not None and osproc.looks_like_python(c.pid)
+                )
+                self._child_python[c.pid] = python
+            out.append(
+                ChildProcess(
+                    pid=c.pid,
+                    parent_pid=c.ppid,
+                    name=c.name,
+                    cmdline=c.cmdline,
+                    python=python,
+                    state=c.state,
+                    rss=c.rss,
+                    num_threads=c.num_threads,
+                    user_time=c.utime,
+                    system_time=c.stime,
+                    uptime=max(time.time() - c.start_time, 0.0) if c.start_time else 0.0,
+                    cpu_percent=self._cpu_percent(c.pid, now, c.utime + c.stime, self._child_cpu),
+                )
+            )
+        return tuple(out)
 
     def stream(self, interval: float = 1.0, **kwargs) -> Iterator[Snapshot]:
         """Yield snapshots forever, ``interval`` seconds apart, until the target exits."""

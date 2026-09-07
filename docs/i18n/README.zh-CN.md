@@ -88,7 +88,9 @@ sgrud PID --record out.bin          打开界面的同时录制每一个样本
 
 GC 标签页显示回收占用的时间比例、每秒回收次数、被追踪的对象数和回收历史。目标进程自己只保留最近 11 次年轻代和 3 次老年代回收，
 所以 monitor 会把见过的记录累积起来。采样器运行时，这里还会列出触发回收的函数，
-也就是分配最频繁的地方。Process 标签页在平台允许的范围内拆分内存，见[平台](#平台)。
+也就是分配最频繁的地方。Process 标签页在平台允许的范围内拆分内存，见[平台](#平台)，
+还会列出目标的子进程及其 CPU 和内存，并标出哪些是 Python 解释器，`multiprocessing`
+进程池或者由 supervisor 拉起的 worker 一眼就能看到。再开一个 `sgrud PID` 就能检查其中任何一个。
 
 ![Tasks 标签页，以树形显示 asyncio 任务及各任务正在等待的内容](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
 
@@ -128,6 +130,7 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
     print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
+    print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.to_dict())  # JSON friendly
 ```
 

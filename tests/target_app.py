@@ -57,4 +57,22 @@ if __name__ == "__main__":
     if "--exit-after" in sys.argv:
         time.sleep(float(sys.argv[sys.argv.index("--exit-after") + 1]))
         sys.exit(3)
+    if "--children" in sys.argv:
+        # One Python grandchild through a Python child, and one non-Python
+        # child, so child discovery has a tree to find.
+        import subprocess
+
+        napper = "import time; time.sleep(300)"
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                f"import subprocess, sys; "
+                f"subprocess.Popen([sys.executable, '-c', {napper!r}]); {napper}",
+            ]
+        )
+        if sys.platform == "win32":
+            subprocess.Popen(["ping", "-n", "300", "127.0.0.1"], stdout=subprocess.DEVNULL)
+        else:
+            subprocess.Popen(["sleep", "300"])
     asyncio.run(main())

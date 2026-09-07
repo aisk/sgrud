@@ -257,6 +257,30 @@ class Process:
 
 
 @dataclass(frozen=True, slots=True)
+class ChildProcess:
+    """A descendant of the target: a worker of a pool, a subprocess, a shell."""
+
+    pid: int
+    parent_pid: int
+    #: The executable's base name.
+    name: str
+    cmdline: tuple[str, ...]
+    #: Whether it is a CPython interpreter sgrud could attach to. False
+    #: also when its memory cannot be read.
+    python: bool
+    state: str
+    rss: int
+    num_threads: int
+    user_time: float
+    system_time: float
+    #: Seconds since the child started.
+    uptime: float
+    #: CPU usage since the previous snapshot in percent of one core,
+    #: ``None`` the first time the child is seen.
+    cpu_percent: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Snapshot:
     """A consistent-as-practical picture of the target at one instant."""
 
@@ -265,6 +289,8 @@ class Snapshot:
     threads: tuple[Thread, ...] = ()
     tasks: tuple[Task, ...] = ()
     gc: tuple[GCGeneration, ...] = ()
+    #: Every descendant of the target, parents before children.
+    children: tuple[ChildProcess, ...] = ()
     #: Sections that could not be collected, mapped to the error text.
     errors: dict[str, str] = field(default_factory=dict)
 

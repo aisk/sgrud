@@ -93,7 +93,7 @@ sgrud PID --record out.bin          인터페이스를 열면서 모든 샘플�
 동작합니다. 플레임 그래프는 아래에서 위로 자라며 첫 번째 행에서 각 스레드에 고유한
 블록을 배정하므로, 유휴 스레드는 다른 스레드와 섞이지 않고 높은 기둥으로 나타납니다.
 
-GC 탭은 수집에 쓴 시간의 비율, 초당 수집 횟수, 추적 중인 객체 수, 수집 이력을 보여줍니다. 대상 프로세스는 최근 젊은 세대 11회와 오래된 세대 3회만 보관하므로 monitor가 본 기록을 모두 누적합니다. 샘플러가 돌고 있으면 수집을 유발한 함수, 즉 할당이 몰리는 곳도 표시합니다. Process 탭은 플랫폼이 허용하는 만큼 메모리를 나누어 보여줍니다. [플랫폼](#플랫폼)을 참고하세요.
+GC 탭은 수집에 쓴 시간의 비율, 초당 수집 횟수, 추적 중인 객체 수, 수집 이력을 보여줍니다. 대상 프로세스는 최근 젊은 세대 11회와 오래된 세대 3회만 보관하므로 monitor가 본 기록을 모두 누적합니다. 샘플러가 돌고 있으면 수집을 유발한 함수, 즉 할당이 몰리는 곳도 표시합니다. Process 탭은 플랫폼이 허용하는 만큼 메모리를 나누어 보여줍니다. [플랫폼](#플랫폼)을 참고하세요. 또한 대상의 자식 프로세스를 CPU와 메모리와 함께 나열하고 Python 인터프리터인 것을 표시하므로, `multiprocessing` 풀이나 슈퍼바이저가 띄운 워커를 한눈에 볼 수 있습니다. 그중 어느 것이든 별도의 `sgrud PID`로 검사할 수 있습니다.
 
 ![Tasks 탭. asyncio 태스크 트리와 각 태스크가 기다리는 대상을 표시](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
 
@@ -134,6 +134,7 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
     print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
+    print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.to_dict())  # JSON friendly
 ```
 

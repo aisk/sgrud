@@ -114,7 +114,11 @@ dernières des anciennes, donc le monitor accumule chaque enregistrement qu'il
 a vu. Pendant que l'échantillonneur tourne, l'onglet nomme aussi les fonctions
 qui ont déclenché les collectes, c'est-à-dire là où les allocations se
 concentrent. L'onglet Process détaille la mémoire autant que la plateforme le
-permet, voir [Plateformes](#plateformes).
+permet, voir [Plateformes](#plateformes), et liste les processus enfants de
+la cible avec leur CPU et leur mémoire, en marquant ceux qui sont des
+interpréteurs Python, de sorte qu'un pool `multiprocessing` ou un worker
+lancé par un superviseur se voit d'un coup d'œil. Chacun d'eux peut être
+inspecté avec un second `sgrud PID`.
 
 ![L'onglet Tasks, montrant l'arbre des tâches asyncio et ce que chaque tâche attend](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
 
@@ -158,6 +162,7 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
     print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
+    print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.to_dict())  # JSON friendly
 ```
 

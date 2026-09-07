@@ -104,7 +104,10 @@ only keeps its last 11 young and 3 old collections, so the monitor accumulates
 every record it has seen. While the sampler runs the tab also names the
 functions collections were triggered from, which is where the allocation churn
 is. The Process tab breaks memory down as far as the platform allows, see
-[Platforms](#platforms).
+[Platforms](#platforms), and lists the target's child processes with their
+CPU and memory, marking the ones that are Python interpreters, so a
+`multiprocessing` pool or a worker started by a supervisor is one glance
+away. Any of them can be inspected with a second `sgrud PID`.
 
 ![The Tasks tab, showing the asyncio task tree with what each task is awaiting](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
 
@@ -147,6 +150,7 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
     print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
+    print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.to_dict())  # JSON friendly
 ```
 

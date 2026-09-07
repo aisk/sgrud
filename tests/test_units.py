@@ -254,6 +254,8 @@ def test_web_command_carries_terminal_options():
     assert argv[:3] == [sys.executable, "-m", "sgrud"]
     assert argv[3] == "4321"
     assert argv[4:] == ["-n", "0.5", "--rate", "100.0", "--mode", "gil", "--no-gc", "--no-native"]
+    args = build_parser().parse_args(["top", "1", "--no-children"])
+    assert web_command(args, 1)[-1] == "--no-children"
 
 
 def test_web_flags_default_to_loopback():

@@ -103,7 +103,12 @@ Tab GC cho thấy tỷ lệ thời gian dành cho thu gom, số lần thu gom m�
 giữ 11 lần thu gom thế hệ trẻ và 3 lần thế hệ già gần nhất, nên monitor tích
 lũy mọi bản ghi nó từng thấy. Khi sampler đang chạy, tab này còn nêu tên các
 hàm đã kích hoạt thu gom, tức là nơi cấp phát dồn dập nhất. Tab Process tách
-bộ nhớ chi tiết đến mức nền tảng cho phép, xem [Nền tảng](#nền-tảng).
+bộ nhớ chi tiết đến mức nền tảng cho phép, xem [Nền tảng](#nền-tảng), và
+liệt kê các tiến trình con của mục tiêu cùng CPU và bộ nhớ của chúng, đánh
+dấu những tiến trình là trình thông dịch Python, nên một pool
+`multiprocessing` hay một worker do supervisor khởi động chỉ cần liếc qua là
+thấy. Có thể kiểm tra bất kỳ tiến trình nào trong số đó bằng một `sgrud PID`
+thứ hai.
 
 ![Tab Tasks, hiển thị cây task asyncio cùng thứ mỗi task đang chờ](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
 
@@ -145,6 +150,7 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
     print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
+    print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.to_dict())  # JSON friendly
 ```
 

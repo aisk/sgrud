@@ -112,7 +112,11 @@ der alten Generationen, deshalb sammelt der Monitor jeden Eintrag, den er
 gesehen hat. Läuft der Sampler, nennt der Tab auch die Funktionen, aus denen
 Collections ausgelöst wurden, also die Stellen mit dem meisten
 Allokationsaufkommen. Der Process-Tab schlüsselt den Speicher so weit auf, wie
-es die Plattform erlaubt, siehe [Plattformen](#plattformen).
+es die Plattform erlaubt, siehe [Plattformen](#plattformen), und listet die
+Kindprozesse des Ziels mit CPU und Speicher auf, wobei die Python-Interpreter
+darunter markiert werden. Ein `multiprocessing`-Pool oder ein von einem
+Supervisor gestarteter Worker ist so auf einen Blick zu sehen, und jeder davon
+lässt sich mit einem zweiten `sgrud PID` untersuchen.
 
 ![Der Tasks-Tab mit dem Baum der asyncio-Tasks und dem, worauf jeder Task wartet](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
 
@@ -156,6 +160,7 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
     print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
+    print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.to_dict())  # JSON friendly
 ```
 

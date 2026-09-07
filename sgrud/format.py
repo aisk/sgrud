@@ -6,7 +6,7 @@ import math
 import os
 from collections.abc import Iterable, Mapping
 
-from .models import Frame, Process, Snapshot, Task, Thread
+from .models import ChildProcess, Frame, Process, Snapshot, Task, Thread
 
 
 def human_bytes(n: int) -> str:
@@ -195,6 +195,24 @@ def format_gc(snap: Snapshot) -> list[str]:
     return lines
 
 
+def format_children(children: Iterable[ChildProcess]) -> list[str]:
+    """One line per descendant, indented by depth under the target."""
+    children = list(children)
+    depth = {c.pid: 0 for c in children}
+    for c in children:
+        depth[c.pid] = depth.get(c.parent_pid, -1) + 1
+    lines = []
+    for c in children:
+        cmd = " ".join(c.cmdline)[:60] or c.name or "?"
+        kind = "python" if c.python else "other"
+        lines.append(
+            f"  {'  ' * depth[c.pid]}[{c.pid}] {kind:<6} {c.state or '?':<8} "
+            f"cpu={percent(c.cpu_percent)}%  rss={human_bytes(c.rss)}  "
+            f"threads={c.num_threads}  {cmd}"
+        )
+    return lines
+
+
 def format_snapshot(
     snap: Snapshot,
     *,
@@ -202,6 +220,7 @@ def format_snapshot(
     frames: bool = True,
     tasks: bool = True,
     gc: bool = True,
+    children: bool = True,
     max_frames: int | None = None,
 ) -> str:
     p = snap.process
@@ -224,6 +243,11 @@ def format_snapshot(
         lines.append("")
         lines.append("gc:")
         lines.extend(format_gc(snap))
+    if children and snap.children:
+        pythons = sum(c.python for c in snap.children)
+        lines.append("")
+        lines.append(f"children ({len(snap.children)}, {pythons} python):")
+        lines.extend(format_children(snap.children))
     for section, err in snap.errors.items():
         lines.append(f"! {section}: {err}")
     return "\n".join(lines)

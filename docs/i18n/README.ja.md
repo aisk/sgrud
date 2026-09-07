@@ -101,7 +101,9 @@ GC タブには、回収に費やした時間の割合、毎秒の回収回数�
 回収の履歴が表示されます。対象プロセス自身は直近の若い世代 11 回と古い世代 3 回しか保持しないため、
 monitor が見たレコードをすべて蓄積します。サンプラーが動いている間は、回収のきっかけになった関数、
 つまり割り当てが集中している場所も表示します。Process タブはプラットフォームが許す限りメモリを分解して表示します。
-[プラットフォーム](#プラットフォーム)を参照してください。
+[プラットフォーム](#プラットフォーム)を参照してください。さらに対象の子プロセスを CPU とメモリ付きで一覧し、
+Python インタプリタであるものに印を付けるので、`multiprocessing` のプールやスーパーバイザが起動した
+ワーカーが一目で分かります。どれでも別の `sgrud PID` で検査できます。
 
 ![Tasks タブ。asyncio タスクのツリーと各タスクが待機している対象を表示](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
 
@@ -142,6 +144,7 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
     print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
+    print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.to_dict())  # JSON friendly
 ```
 
