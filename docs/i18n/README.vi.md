@@ -46,8 +46,13 @@ sgrud probe PID                     chạy một script bên trong mục tiêu: 
 sgrud probe PID -t 10               đếm thêm các đối tượng được theo dõi theo kiểu, mười kiểu nhiều nhất
 ```
 
-`--no-stacks`, `--no-tasks` và `--no-gc` bỏ bớt những phần bạn không cần
-khỏi giao diện hoặc bản dump.
+`--no-stacks`, `--no-tasks`, `--no-gc`, `--no-children` và `--no-ipc` bỏ bớt
+những phần bạn không cần khỏi giao diện hoặc bản dump.
+
+`examples/demo_app.py` cho mọi tab đều có nội dung. Nó chạy các luồng bận và
+bị chặn, một cây tác vụ asyncio, các worker `multiprocessing`, pipe, socket,
+bộ nhớ dùng chung và một khóa tệp do tiến trình con giữ. Khởi động nó rồi
+trỏ sgrud vào pid mà nó in ra.
 
 ### Các chế độ lấy mẫu
 
@@ -85,7 +90,7 @@ dưới giao diện, xuyên suốt các lần đổi chế độ.
 
 | Phím | Hành động |
 | --- | --- |
-| `1`-`6`, `tab`, `shift+tab` | chuyển tab |
+| `1`-`7`, `tab`, `shift+tab` | chuyển tab |
 | `p` / `r` | tạm dừng / làm mới |
 | `+` / `-` | thay đổi khoảng làm mới |
 | `q` | thoát |
@@ -113,6 +118,18 @@ dấu những tiến trình là trình thông dịch Python, nên một pool
 `multiprocessing` hay một worker do supervisor khởi động chỉ cần liếc qua là
 thấy. Có thể kiểm tra bất kỳ tiến trình nào trong số đó bằng một `sgrud PID`
 thứ hai.
+
+Tab IPC dành cho tiến trình bị treo: nó liệt kê mọi descriptor mà tiến trình
+đích đang mở, gồm pipe, socket kèm địa chỉ và trạng thái, bộ nhớ chia sẻ,
+tệp, và với mỗi pipe cho biết tiến trình cha hay tiến trình con nào của đích
+đang giữ đầu bên kia. Phía trên bảng là số descriptor so với giới hạn, các
+đoạn bộ nhớ chia sẻ và semaphore `multiprocessing` đã ánh xạ, các khóa tệp
+mà đích đang giữ, và bằng màu đỏ là khóa mà nó đang bị chặn chờ cùng pid
+đang giữ khóa đó. Trên Linux tab Threads có thêm system call mà một thread
+đang ngủ dừng lại cùng descriptor của nó, chẳng hạn `read(fd 4)`, và bảng
+IPC ghi tên thread cạnh descriptor đó. Chỉ những gì kernel báo cáo được hiển
+thị: một lần chờ `futex` có thể là lock hoặc GIL, và stack Python bên cạnh
+cho biết là cái nào.
 
 ![Tab Tasks, hiển thị cây task asyncio cùng thứ mỗi task đang chờ](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
 
@@ -206,15 +223,19 @@ thông qua psutil, và đó là chỗ các nền tảng khác nhau.
   đánh dấu một thread đang trên CPU ở chế độ wall, và bức tranh bộ nhớ đầy đủ:
   phần ẩn danh và phần ánh xạ tệp của rss, USS và PSS, heap brk và các ánh xạ
   ẩn danh, huge page trong suốt, tốc độ lỗi trang, giới hạn bộ nhớ cgroup và
-  điểm OOM.
+  điểm OOM. Đây cũng là nền tảng duy nhất có bức tranh IPC đầy đủ: pipe và đầu
+  bên kia của chúng, bộ nhớ chia sẻ, khóa tệp và system call mà mỗi thread
+  đang bị chặn (cần cùng quyền như đọc bộ nhớ, và bảng số hiệu mà sgrud có chỉ
+  gồm x86_64, aarch64, riscv64 và loongarch64; nơi khác hiện theo số).
 - **Windows** có tên thread và thời gian CPU của từng thread nhưng không có
   trạng thái lập lịch, nên ở chế độ wall thread hiện `?` thay vì `cpu` /
   `idle`. Bộ nhớ gồm `rss`, `vms`, working set đỉnh, private bytes, USS và tốc
-  độ lỗi trang.
+  độ lỗi trang. IPC là số handle, tệp và socket đang mở, không có số
+  descriptor.
 - **macOS** không thể khớp thread của hệ điều hành với id thread của trình
   thông dịch, nên thread hiện ra không có tên hay số liệu CPU. Bộ nhớ gồm
-  `rss`, `vms`, USS và tốc độ lỗi trang. Đọc bộ nhớ của tiến trình khác cần
-  root, hãy chạy sgrud với `sudo`.
+  `rss`, `vms`, USS và tốc độ lỗi trang. IPC là số descriptor, tệp và socket
+  đang mở. Đọc bộ nhớ của tiến trình khác cần root, hãy chạy sgrud với `sudo`.
 
 ## Quyền hạn
 

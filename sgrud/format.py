@@ -6,7 +6,7 @@ import math
 import os
 from collections.abc import Iterable, Mapping
 
-from .models import ChildProcess, Frame, Process, Snapshot, Task, Thread
+from .models import IPC, ChildProcess, Frame, OpenFile, Process, Snapshot, Task, Thread
 from .probe import ProbeResult
 
 
@@ -61,6 +61,8 @@ def format_thread(t: Thread, *, frames: bool = True, max_frames: int | None = No
         f"[{t.tid}] {t.name:<16} {t.status.describe():<12} state={t.state} "
         f"cpu={percent(t.cpu_percent)}%  utime={t.user_time:.2f}s stime={t.system_time:.2f}s"
     )
+    if t.syscall is not None:
+        head += f"  in {t.syscall.describe()}"
     lines = [head]
     if frames:
         shown = t.frames if max_frames is None else t.frames[:max_frames]
@@ -214,6 +216,73 @@ def format_children(children: Iterable[ChildProcess]) -> list[str]:
     return lines
 
 
+def describe_file(f: OpenFile) -> str:
+    """What a descriptor refers to, addresses included for a socket."""
+    if f.kind != "socket" or not f.family:
+        return f.target
+    text = f.family
+    if f.local:
+        text += f" {f.local}"
+    if f.remote:
+        text += f" -> {f.remote}"
+    if f.status:
+        text += f" {status_lower(f.status)}"
+    return text
+
+
+def status_lower(status: str) -> str:
+    return status.lower().replace("_", "-")
+
+
+def ipc_summary(ipc: IPC) -> list[str]:
+    """The headline lines of the ipc section: fd usage, shared memory, locks."""
+    usage = f"{ipc.num_fds}"
+    if ipc.max_fds:
+        usage += f" of {ipc.max_fds} ({100 * ipc.num_fds / ipc.max_fds:.0f}%)"
+    counts = "  ".join(f"{kind} {n}" for kind, n in ipc.counts().items())
+    lines = [f"fds      {usage}   {counts}".rstrip()]
+    if ipc.truncated:
+        lines[-1] += f"   (first {len(ipc.files)} listed)"
+    shm = [m for m in ipc.mappings if m.kind == "shm"]
+    if shm or ipc.semaphores:
+        parts = [f"{m.path}{' (deleted)' if m.deleted else ''} {human_bytes(m.size)}" for m in shm]
+        if ipc.semaphores:
+            parts.append(f"semaphores {ipc.semaphores}")
+        lines.append("shared   " + "   ".join(parts))
+    for lock in ipc.locks:
+        span = "" if lock.start == 0 and lock.end < 0 else f" bytes {lock.start}-{lock.end}"
+        if lock.waiting:
+            state = f"WAITING for pid {lock.holder}" if lock.holder > 0 else "WAITING"
+        else:
+            state = "held"
+        lines.append(f"lock     {lock.kind} {lock.mode} {lock.path or lock.inode}{span}  {state}")
+    return lines
+
+
+def format_ipc(snap: Snapshot, *, limit: int | None = None) -> list[str]:
+    """The ipc section: summary lines, then one line per descriptor."""
+    ipc = snap.ipc
+    if ipc is None:
+        return []
+    lines = ipc_summary(ipc)
+    waiting: dict[int, str] = {}
+    for t in snap.threads:
+        if t.syscall is not None and t.syscall.fd >= 0:
+            waiting.setdefault(t.syscall.fd, f"thread {t.tid} {t.name} in {t.syscall.name}")
+    shown = ipc.files if limit is None else ipc.files[:limit]
+    for f in shown:
+        fd = "-" if f.fd < 0 else str(f.fd)
+        line = f"  {fd:>4} {f.kind:<6} {f.mode or '-':<3} {describe_file(f)}"
+        if f.shared_with:
+            line += f"  shared with pid {', '.join(map(str, f.shared_with))}"
+        if f.fd in waiting:
+            line += f"  <- {waiting[f.fd]}".rstrip()
+        lines.append(line)
+    if limit is not None and len(ipc.files) > limit:
+        lines.append(f"  ... {len(ipc.files) - limit} more")
+    return lines
+
+
 def format_snapshot(
     snap: Snapshot,
     *,
@@ -222,6 +291,7 @@ def format_snapshot(
     tasks: bool = True,
     gc: bool = True,
     children: bool = True,
+    ipc: bool = True,
     max_frames: int | None = None,
 ) -> str:
     p = snap.process
@@ -249,6 +319,10 @@ def format_snapshot(
         lines.append("")
         lines.append(f"children ({len(snap.children)}, {pythons} python):")
         lines.extend(format_children(snap.children))
+    if ipc and snap.ipc is not None:
+        lines.append("")
+        lines.append("ipc:")
+        lines.extend(format_ipc(snap))
     for section, err in snap.errors.items():
         lines.append(f"! {section}: {err}")
     return "\n".join(lines)

@@ -48,8 +48,13 @@ sgrud probe PID                     run a script inside the target: gc threshold
 sgrud probe PID -t 10               also count the tracked objects by type, ten most common
 ```
 
-`--no-stacks`, `--no-tasks` and `--no-gc` drop sections you do not need
-from the interface or the dump.
+`--no-stacks`, `--no-tasks`, `--no-gc`, `--no-children` and `--no-ipc` drop
+sections you do not need from the interface or the dump.
+
+`examples/demo_app.py` puts something on every tab. It runs busy and blocked
+threads, an asyncio task tree, `multiprocessing` workers, pipes, sockets,
+shared memory and a file lock a child process holds. Start it and point
+sgrud at the pid it prints.
 
 ### Sampling modes
 
@@ -85,7 +90,7 @@ does the same recording under the interface, across mode switches.
 
 | Key | Action |
 | --- | --- |
-| `1`-`6`, `tab`, `shift+tab` | switch tabs |
+| `1`-`7`, `tab`, `shift+tab` | switch tabs |
 | `p` / `r` | pause / refresh |
 | `+` / `-` | change the refresh interval |
 | `q` | quit |
@@ -112,6 +117,18 @@ is. The Process tab breaks memory down as far as the platform allows, see
 CPU and memory, marking the ones that are Python interpreters, so a
 `multiprocessing` pool or a worker started by a supervisor is one glance
 away. Any of them can be inspected with a second `sgrud PID`.
+
+The IPC tab is for the process that hangs: it lists every descriptor the
+target has open, pipes, sockets with their addresses and state, shared
+memory, files, and for each pipe which of the target's parent and children
+hold the other end. Above the table are the descriptor count against its
+limit, the shared memory segments and `multiprocessing` semaphores mapped,
+and the file locks the target holds or, in red, is blocked waiting for and
+by which pid. On Linux the Threads tab adds the system call a sleeping
+thread sits in and the descriptor it is on, `read(fd 4)` say, and the IPC
+table names the thread next to that descriptor. Only what the kernel
+reports is shown: a `futex` wait is a lock or the GIL, and the Python stack
+next to it says which.
 
 ![The Tasks tab, showing the asyncio task tree with what each task is awaiting](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
 
@@ -170,6 +187,8 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
     print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
     print([(c.pid, c.python, c.rss) for c in snap.children])
+    print(snap.ipc.num_fds, snap.ipc.locks, [(f.fd, f.kind, f.target) for f in snap.ipc.files])
+    print([(t.name, t.syscall.describe()) for t in snap.threads if t.syscall])
     print(snap.to_dict())  # JSON friendly
     result = m.probe(types=5)  # runs code in the target, see Probing
     print(result.gc_threshold, result.gc_count, result.types)
@@ -207,15 +226,20 @@ the OS through psutil, and that is where the platforms differ.
   what marks a thread as on CPU in wall mode, and the full memory picture: the
   anonymous and file backed parts of rss, USS and PSS, the brk heap and
   anonymous mappings, transparent huge pages, page fault rates, the cgroup
-  memory limit and the OOM score.
+  memory limit and the OOM score. It is also the only platform with the full
+  IPC picture: pipes and their other ends, shared memory, file locks and the
+  system call each thread is blocked in (which needs the same access as
+  reading memory, and a call table sgrud has for x86_64, aarch64, riscv64
+  and loongarch64; elsewhere calls show by number).
 - **Windows** has thread names and per-thread CPU time but no scheduler state,
   so threads read as `?` instead of `cpu` / `idle` in wall mode. Memory is
   `rss`, `vms`, the peak working set, private bytes, USS and the page fault
-  rate.
+  rate. IPC is the handle count, open files and sockets, without descriptor
+  numbers.
 - **macOS** cannot match OS threads to the interpreter's thread ids, so
   threads show without names or CPU figures. Memory is `rss`, `vms`, USS and
-  the page fault rate. Reading another process's memory needs root, so run
-  sgrud with `sudo`.
+  the page fault rate. IPC is the descriptor count, open files and sockets.
+  Reading another process's memory needs root, so run sgrud with `sudo`.
 
 ## Permissions
 

@@ -322,6 +322,76 @@ def test_children_are_listed_and_marked_python():
         proc.wait()
 
 
+def test_ipc_section_lists_descriptors_locks_and_waits():
+    import psutil
+    from conftest import spawn_target
+
+    from sgrud.format import format_ipc
+    from sgrud.ipc import SYSCALL_NAMES
+
+    proc = spawn_target("--ipc")
+    try:
+        assert proc.stdout is not None
+        _, pipe_fd, port, lock_path, segment, child_pid = proc.stdout.readline().split()
+        assert proc.stdout.readline().strip() == b"READY"
+        with Monitor.attach(proc.pid) as m:
+            snap = m.snapshot(stacks=False, tasks=False, gc=False)
+            assert "ipc" not in snap.errors, snap.errors
+            ipc = snap.ipc
+            assert ipc is not None and ipc.num_fds > 0 and not ipc.truncated
+            listener = next(
+                f for f in ipc.files if f.kind == "socket" and f.local.endswith(f":{port.decode()}")
+            )
+            assert listener.family == "tcp" and listener.status == "LISTEN"
+            lines = format_ipc(snap)
+            assert any("listen" in line and port.decode() in line for line in lines)
+            if sys.platform == "win32":
+                return
+            lock_file = next(f for f in ipc.files if f.target == lock_path.decode())
+            assert lock_file.kind == "file" and lock_file.mode == "w"
+            if not sys.platform.startswith("linux"):
+                return
+            # A pipe whose read end a thread sits in, its write end in the same process.
+            pipe = ipc.file(int(pipe_fd))
+            assert pipe is not None and pipe.kind == "pipe" and pipe.mode == "r"
+            assert [o.mode for o in ipc.same_object(pipe.fd)] == ["w"]
+            if SYSCALL_NAMES:
+                reader = next(t for t in snap.threads if t.name == "pipereader")
+                assert reader.syscall is not None, reader
+                assert reader.syscall.name == "read" and reader.syscall.fd == pipe.fd
+                assert reader.syscall.target == pipe.target
+                assert any(f"<- thread {reader.tid} pipereader in read" in line for line in lines)
+            # The child's stdin is a pipe the target holds the write end of.
+            stdin = next(f for f in ipc.files if int(child_pid) in f.shared_with)
+            assert stdin.kind == "pipe" and stdin.mode == "w"
+            # The flock, resolved to its path.
+            (lock,) = [lk for lk in ipc.locks if lk.path == lock_path.decode()]
+            assert lock.kind == "flock" and lock.mode == "write" and not lock.waiting
+            assert lock.holder == proc.pid
+            assert any(line.startswith("lock     flock write") for line in lines)
+            # The shared memory segment, as a descriptor and as a mapping.
+            shm = [f for f in ipc.files if f.kind == "shm"]
+            assert shm and all(f.target.endswith(segment.decode()) for f in shm)
+            (mapping,) = ipc.mappings
+            assert mapping.kind == "shm" and mapping.size >= 4096
+            assert ipc.counts()["pipe"] >= 3
+            assert m.snapshot(ipc=False).ipc is None
+            assert all(t.syscall is None for t in m.snapshot(ipc=False, stacks=False).threads)
+    finally:
+        # The target goes first, then its children get EOF on their pipes
+        # and exit, and the resource tracker among them unlinks the segment.
+        children = psutil.Process(proc.pid).children(recursive=True)
+        proc.kill()
+        proc.wait()
+        for child in psutil.wait_procs(children, timeout=5)[1]:
+            child.kill()
+        import contextlib
+        import os
+
+        with contextlib.suppress(OSError, NameError):
+            os.unlink(lock_path.decode())
+
+
 def test_probe_runs_inside_the_target(monitor):
     from sgrud.format import format_probe
 

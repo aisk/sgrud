@@ -41,10 +41,12 @@ from textual.widgets import (
 from .errors import ProcessExited, SgrudError
 from .export import Recorder
 from .format import (
+    describe_file,
     human_bytes,
     human_count,
     human_duration,
     human_rate,
+    ipc_summary,
     memory_rows,
     percent,
     short_path,
@@ -82,6 +84,45 @@ def _latest_collection(snap: Snapshot) -> GCCollection | None:
         if g.history and (latest is None or g.history[0].stopped_at > latest.stopped_at):
             latest = g.history[0]
     return latest
+
+
+_KIND_STYLES = {"pipe": "yellow", "socket": "green", "shm": "magenta", "anon": "dim"}
+
+
+def _waiting_threads(snap: Snapshot) -> dict[int, tuple[Thread, str]]:
+    """Descriptor to (thread blocked on it, name of the call)."""
+    out: dict[int, tuple[Thread, str]] = {}
+    for t in snap.threads:
+        if t.syscall is not None and t.syscall.fd >= 0:
+            out.setdefault(t.syscall.fd, (t, t.syscall.name))
+    return out
+
+
+def _syscall_text(t: Thread) -> str:
+    if t.syscall is None:
+        return ""
+    return t.syscall.name if t.syscall.fd < 0 else f"{t.syscall.name}(fd {t.syscall.fd})"
+
+
+def _syscall_note(t: Thread, snap: Snapshot) -> str:
+    """One line on the call a thread is blocked in and what its descriptor is."""
+    sc = t.syscall
+    if sc is None:
+        return ""
+    note = f"in {sc.describe()}"
+    if snap.ipc is None or sc.fd < 0:
+        return note
+    f = snap.ipc.file(sc.fd)
+    if f is None:
+        return note
+    if f.kind == "socket":
+        note = f"in {sc.name}(fd {sc.fd} {describe_file(f)})"
+    if f.shared_with:
+        note += f", shared with pid {', '.join(map(str, f.shared_with))}"
+    others = snap.ipc.same_object(sc.fd)
+    if others:
+        note += ", also fd " + ", ".join(f"{o.fd} ({o.mode})" for o in others) + " here"
+    return note
 
 
 def _top_frame(frames) -> str:
@@ -143,11 +184,14 @@ class StackPanel(Static):
     last_frames: tuple = ()
     stale: bool = False
 
-    def show(self, title: str, frames, *, stale: bool = False) -> None:
+    def show(self, title: str, frames, *, stale: bool = False, note: str = "") -> None:
+        """``note`` is a line under the title, for what the thread is blocked in."""
         self.last_title = title
         self.last_frames = tuple(frames)
         self.stale = stale
         header = Text(title, style="bold red" if stale else "bold")
+        if note:
+            header = Group(header, Text(note, style="dim" if stale else "cyan"))
         if not self.last_frames:
             self.update(Group(header, Text("  (no Python frames)", style="dim")))
             return
@@ -426,6 +470,8 @@ class SgrudApp(App[int]):
     #procinfo { padding: 1; height: auto; }
     #children-label { padding: 0 1; color: $text-muted; }
     #children-table { height: 1fr; }
+    #ipc-info { padding: 1; height: auto; }
+    #ipc-table { height: 1fr; }
     """
     # Focus always lives in the active tab's content, never on the tab bar,
     # so the arrow keys drive tables, trees and the flame graph while tab
@@ -438,12 +484,13 @@ class SgrudApp(App[int]):
         Binding("r", "refresh_now", "Refresh"),
         Binding("+,=", "faster", "Faster", key_display="+"),
         Binding("-", "slower", "Slower"),
-        Binding("1", "tab('threads')", "Tabs", key_display="1-6 tab"),
+        Binding("1", "tab('threads')", "Tabs", key_display="1-7 tab"),
         Binding("2", "tab('tasks')", "Tasks", show=False),
         Binding("3", "tab('gc')", "GC", show=False),
         Binding("4", "tab('process')", "Process", show=False),
         Binding("5", "tab('hotspots')", "Hotspots", show=False),
         Binding("6", "tab('flame')", "Flame", show=False),
+        Binding("7", "tab('ipc')", "IPC", show=False),
         Binding("tab", "next_tab", "Next tab", show=False, priority=True),
         Binding("shift+tab", "previous_tab", "Previous tab", show=False, priority=True),
         Binding("f", "focus_filter", "Filter"),
@@ -461,6 +508,7 @@ class SgrudApp(App[int]):
         "process": "#children-table",
         "hotspots": "#hot-table",
         "flame": "#flame-graph",
+        "ipc": "#ipc-table",
     }
 
     def __init__(
@@ -472,6 +520,7 @@ class SgrudApp(App[int]):
         tasks: bool = True,
         gc: bool = True,
         children: bool = True,
+        ipc: bool = True,
         sample_rate: float = 100.0,
         sample_mode: str = "wall",
         record: str | None = None,
@@ -490,7 +539,7 @@ class SgrudApp(App[int]):
         self.hot_thread: int | None = None
         self._hot_options: tuple[int, ...] = ()
         self.interval = interval
-        self.sections = dict(stacks=stacks, tasks=tasks, gc=gc, children=children)
+        self.sections = dict(stacks=stacks, tasks=tasks, gc=gc, children=children, ipc=ipc)
         self.paused = False
         #: Set once the target has gone away. The last snapshot is kept.
         self.exited: ProcessExited | None = None
@@ -579,11 +628,14 @@ class SgrudApp(App[int]):
                 with VerticalScroll(id="flame-scroll", can_focus=False):
                     yield FlameGraph(id="flame-graph")
                 yield Static("", id="flame-status")
+            with TabPane("IPC", id="ipc"):
+                yield Static("", id="ipc-info")
+                yield DataTable(id="ipc-table", cursor_type="row", zebra_stripes=True)
         yield Footer()
 
     def on_mount(self) -> None:
         table = self.query_one("#threads-table", DataTable)
-        table.add_columns("tid", "name", "status", "st", "cpu%", "utime", "where")
+        table.add_columns("tid", "name", "status", "st", "cpu%", "utime", "syscall", "where")
         gc = self.query_one("#gc-table", DataTable)
         gc.add_columns(
             "gen", "collections", "rate", "time%", "mean", "collected", "uncollectable", "objects"
@@ -594,6 +646,8 @@ class SgrudApp(App[int]):
         hot.add_columns("self%", "total%", "self", "total", "function", "file")
         kids = self.query_one("#children-table", DataTable)
         kids.add_columns("pid", "kind", "state", "cpu%", "rss", "threads", "command")
+        ipc = self.query_one("#ipc-table", DataTable)
+        ipc.add_columns("fd", "kind", "mode", "object", "shared with", "thread")
         self.query_one("#flame-scroll", VerticalScroll).anchor()
         self.query_one(Tabs).can_focus = False
         self._focus_content()
@@ -813,6 +867,7 @@ class SgrudApp(App[int]):
         self._update_tasks(snap)
         self._update_gc(snap)
         self._update_process(snap)
+        self._update_ipc(snap)
         self._update_hotspots(snap)
         if self.query_one("#tabs", TabbedContent).active == "flame":
             self._update_flame(snap)
@@ -830,6 +885,7 @@ class SgrudApp(App[int]):
                 t.state,
                 percent(t.cpu_percent),
                 f"{t.user_time + t.system_time:.2f}",
+                _syscall_text(t),
                 _top_frame(t.frames),
             )
             if key in table.rows:
@@ -847,7 +903,10 @@ class SgrudApp(App[int]):
         panel = self.query_one("#thread-stack", StackPanel)
         if t is not None:
             self._last_thread = t
-            panel.show(f"[{t.tid}] {t.name}  {t.status.describe()}", t.frames)
+            note = ""
+            if t.syscall is not None and self.snapshot is not None:
+                note = _syscall_note(t, self.snapshot)
+            panel.show(f"[{t.tid}] {t.name}  {t.status.describe()}", t.frames, note=note)
             return
         last = self._last_thread
         if last is None:
@@ -1023,6 +1082,39 @@ class SgrudApp(App[int]):
                 str(c.num_threads),
                 "  " * depth[c.pid] + cmd,
                 key=str(c.pid),
+            )
+
+    def _update_ipc(self, snap: Snapshot) -> None:
+        info = self.query_one("#ipc-info", Static)
+        table = self.query_one("#ipc-table", DataTable)
+        ipc = snap.ipc
+        if ipc is None:
+            err = snap.errors.get("ipc")
+            info.update(Text(err or "ipc section disabled (--no-ipc)", "dim"))
+            table.display = False
+            return
+        text = Text()
+        for i, line in enumerate(ipc_summary(ipc)):
+            if i:
+                text.append("\n")
+            text.append(line, "bold red" if "WAITING" in line else "")
+        info.update(text)
+        table.display = True
+        waiting = _waiting_threads(snap)
+        table.clear()
+        for f in ipc.files:
+            blocked = ""
+            if f.fd in waiting:
+                t, name = waiting[f.fd]
+                blocked = Text(f"{t.name or t.tid} in {name}", "cyan")
+            table.add_row(
+                "-" if f.fd < 0 else str(f.fd),
+                Text(f.kind, _KIND_STYLES.get(f.kind, "")),
+                f.mode or "-",
+                describe_file(f),
+                ", ".join(map(str, f.shared_with)),
+                blocked,
+                key=f"{f.fd}:{f.target}",
             )
 
     def _sync_thread_filters(self, snap: Snapshot) -> None:

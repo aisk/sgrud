@@ -57,6 +57,36 @@ if __name__ == "__main__":
     if "--exit-after" in sys.argv:
         time.sleep(float(sys.argv[sys.argv.index("--exit-after") + 1]))
         sys.exit(3)
+    if "--ipc" in sys.argv:
+        # Things sgrud's ipc section should find: a thread blocked reading
+        # a pipe, a listening socket, a file lock, a shared memory segment
+        # and a child holding the other end of a pipe.
+        import os
+        import socket
+        import subprocess
+        import tempfile
+        from multiprocessing import shared_memory
+
+        pipe_r, pipe_w = os.pipe()
+        threading.Thread(target=os.read, args=(pipe_r, 1), name="pipereader", daemon=True).start()
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        lock_file = open(os.path.join(tempfile.gettempdir(), f"sgrud-{os.getpid()}.lock"), "w")
+        if sys.platform != "win32":
+            import fcntl
+
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+        segment = shared_memory.SharedMemory(create=True, size=4096)
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE
+        )
+        # Report what to look for, and keep everything referenced.
+        print(
+            f"IPC {pipe_r} {listener.getsockname()[1]} {lock_file.name} {segment.name} {child.pid}",
+            flush=True,
+        )
+        keep = (pipe_r, pipe_w, listener, lock_file, segment, child)  # noqa: F841
     if "--children" in sys.argv:
         # One Python grandchild through a Python child, and one non-Python
         # child, so child discovery has a tree to find.

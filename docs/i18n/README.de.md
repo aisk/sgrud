@@ -48,8 +48,13 @@ sgrud probe PID                     ein Skript im Ziel ausführen: gc-Schwellen,
 sgrud probe PID -t 10               zusätzlich verfolgte Objekte nach Typ zählen, die zehn häufigsten
 ```
 
-`--no-stacks`, `--no-tasks` und `--no-gc` blenden Abschnitte, die Sie nicht
-brauchen, aus der Oberfläche oder dem Dump aus.
+`--no-stacks`, `--no-tasks`, `--no-gc`, `--no-children` und `--no-ipc` blenden
+Abschnitte, die Sie nicht brauchen, aus der Oberfläche oder dem Dump aus.
+
+`examples/demo_app.py` bringt etwas auf jeden Tab. Es lässt beschäftigte und
+blockierte Threads laufen, einen asyncio-Taskbaum, `multiprocessing`-Worker,
+Pipes, Sockets, Shared Memory und eine Dateisperre, die ein Kindprozess hält.
+Starten Sie es und richten Sie sgrud auf die ausgegebene pid.
 
 ### Sampling-Modi
 
@@ -91,7 +96,7 @@ Oberfläche, über Moduswechsel hinweg.
 
 | Taste | Aktion |
 | --- | --- |
-| `1`-`6`, `tab`, `shift+tab` | Tabs wechseln |
+| `1`-`7`, `tab`, `shift+tab` | Tabs wechseln |
 | `p` / `r` | pausieren / aktualisieren |
 | `+` / `-` | Aktualisierungsintervall ändern |
 | `q` | beenden |
@@ -121,6 +126,19 @@ Kindprozesse des Ziels mit CPU und Speicher auf, wobei die Python-Interpreter
 darunter markiert werden. Ein `multiprocessing`-Pool oder ein von einem
 Supervisor gestarteter Worker ist so auf einen Blick zu sehen, und jeder davon
 lässt sich mit einem zweiten `sgrud PID` untersuchen.
+
+Der IPC-Tab ist für den Prozess, der hängt: Er listet jeden Deskriptor, den
+das Ziel offen hat, Pipes, Sockets mit Adressen und Zustand, Shared Memory,
+Dateien, und zu jeder Pipe, welche von Eltern- und Kindprozessen des Ziels
+das andere Ende halten. Über der Tabelle stehen die Zahl der Deskriptoren
+gegenüber ihrem Limit, die gemappten Shared-Memory-Segmente und
+`multiprocessing`-Semaphoren sowie die Dateisperren, die das Ziel hält oder,
+in Rot, auf die es wartet, samt der pid, die sie hält. Unter Linux zeigt der
+Threads-Tab zusätzlich den Systemaufruf, in dem ein schlafender Thread
+steckt, und den betroffenen Deskriptor, etwa `read(fd 4)`, und die
+IPC-Tabelle nennt den Thread neben diesem Deskriptor. Gezeigt wird nur, was
+der Kernel meldet: Ein `futex`-Warten ist ein Lock oder das GIL, und der
+Python-Stack daneben sagt, welches von beiden.
 
 ![Der Tasks-Tab mit dem Baum der asyncio-Tasks und dem, worauf jeder Task wartet](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
 
@@ -218,14 +236,21 @@ psutil vom Betriebssystem, und dort unterscheiden sich die Plattformen.
   der im wall-Modus einen Thread als auf der CPU laufend markiert, sowie das
   vollständige Speicherbild: anonymer und dateigestützter Anteil des rss, USS
   und PSS, brk-Heap und anonyme Mappings, Transparent Huge Pages,
-  Page-Fault-Rate, das Speicherlimit der cgroup und den OOM-Score.
+  Page-Fault-Rate, das Speicherlimit der cgroup und den OOM-Score. Nur hier
+  gibt es auch das vollständige IPC-Bild: Pipes und ihre anderen Enden, Shared
+  Memory, Dateisperren und den Systemaufruf, in dem jeder Thread blockiert
+  (das braucht denselben Zugriff wie das Lesen des Speichers, und eine
+  Aufruftabelle hat sgrud für x86_64, aarch64, riscv64 und loongarch64; sonst
+  erscheinen Aufrufe als Nummer).
 - **Windows** hat Thread-Namen und CPU-Zeit pro Thread, aber keinen
   Scheduler-Zustand, daher zeigen Threads im wall-Modus `?` statt `cpu` /
   `idle`. Der Speicher umfasst `rss`, `vms`, das Working-Set-Maximum, private
-  Bytes, USS und die Page-Fault-Rate.
+  Bytes, USS und die Page-Fault-Rate. IPC beschränkt sich auf die Zahl der
+  Handles, offene Dateien und Sockets, ohne Deskriptornummern.
 - **macOS** kann Betriebssystem-Threads nicht den Thread-IDs des Interpreters
   zuordnen, daher erscheinen Threads ohne Namen und CPU-Werte. Der Speicher
-  umfasst `rss`, `vms`, USS und die Page-Fault-Rate. Den Speicher eines
+  umfasst `rss`, `vms`, USS und die Page-Fault-Rate. IPC beschränkt sich auf
+  die Zahl der Deskriptoren, offene Dateien und Sockets. Den Speicher eines
   anderen Prozesses zu lesen erfordert root, also sgrud mit `sudo` starten.
 
 ## Berechtigungen

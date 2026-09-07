@@ -44,6 +44,9 @@ def _add_sections(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-tasks", action="store_true", help="skip asyncio tasks")
     parser.add_argument("--no-gc", action="store_true", help="skip GC statistics")
     parser.add_argument("--no-children", action="store_true", help="skip child processes")
+    parser.add_argument(
+        "--no-ipc", action="store_true", help="skip open descriptors, locks and shared memory"
+    )
     parser.add_argument("--no-native", action="store_true", help="hide <native> marker frames")
 
 
@@ -200,6 +203,7 @@ def _dump(args: argparse.Namespace) -> int:
         tasks=not args.no_tasks,
         gc=not args.no_gc,
         children=not args.no_children,
+        ipc=not args.no_ipc,
     )
     try:
         monitor = open_monitor(args.target, args.command_argv, native_frames=not args.no_native)
@@ -218,7 +222,11 @@ def _dump(args: argparse.Namespace) -> int:
                 # A second sample a moment later gives meaningful CPU, page
                 # fault and GC rates.
                 monitor.snapshot(
-                    stacks=False, tasks=False, gc=sections["gc"], children=sections["children"]
+                    stacks=False,
+                    tasks=False,
+                    gc=sections["gc"],
+                    children=sections["children"],
+                    ipc=False,
                 )
                 time.sleep(0.1)
                 snaps = iter([monitor.snapshot(**sections)])
@@ -237,6 +245,7 @@ def _dump(args: argparse.Namespace) -> int:
                             tasks=sections["tasks"],
                             gc=sections["gc"],
                             children=sections["children"],
+                            ipc=sections["ipc"],
                             max_frames=args.max_frames,
                         ),
                         flush=True,
@@ -401,6 +410,7 @@ def _top(args: argparse.Namespace) -> int:
         tasks=not args.no_tasks,
         gc=not args.no_gc,
         children=not args.no_children,
+        ipc=not args.no_ipc,
         sample_rate=args.rate,
         sample_mode=args.mode,
         record=args.record,

@@ -23,14 +23,14 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
 import psutil
 
 from .errors import NotSupported
-from .models import Memory, MemoryLimits
+from .models import IPC, Memory, MemoryLimits
 
 LINUX = sys.platform.startswith("linux")
 MACOS = sys.platform == "darwin"
@@ -66,6 +66,9 @@ def ensure_supported() -> None:
 #: How often the unique set size is refreshed on macOS and Windows, where
 #: psutil walks every page of the working set to compute it.
 USS_INTERVAL = 1.0
+#: How often the socket addresses of the ipc section are refreshed. psutil
+#: parses the system wide ``/proc/net`` tables for them, a few milliseconds.
+CONNECTIONS_INTERVAL = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +108,9 @@ class ThreadStat:
     state: str
     utime: float
     stime: float
+    #: The raw ``/proc/<pid>/task/<tid>/syscall`` line, "" where unreadable
+    #: or unsupported. See :func:`sgrud.ipc.decode_syscall`.
+    syscall: str = ""
 
 
 def pid_exists(pid: int) -> bool:
@@ -131,11 +137,39 @@ class ProcessStats:
         except psutil.NoSuchProcess as e:
             raise ProcessLookupError(pid) from e
         self._uss: tuple[float, int] = (float("-inf"), 0)
+        self._connections: tuple[float, list[Any]] = (float("-inf"), [])
         self._cgroup: _CgroupFiles | None = _linux_cgroup_files(pid) if LINUX else None
 
     def is_running(self) -> bool:
         """Whether the process exists and its pid has not been recycled."""
         return self._proc.is_running()
+
+    def parent_pid(self) -> int:
+        try:
+            return self._proc.ppid()
+        except psutil.NoSuchProcess as e:
+            raise ProcessLookupError(self.pid) from e
+        except psutil.Error:
+            return 0
+
+    def ipc(self, related: Iterable[int] = ()) -> IPC:
+        """Open descriptors, locks and shared memory, see :func:`sgrud.ipc.read_ipc`.
+
+        Socket addresses are refreshed at most every :data:`CONNECTIONS_INTERVAL`.
+        """
+        from .ipc import connections, read_ipc
+
+        def cached(proc: psutil.Process) -> list[Any]:
+            import time
+
+            now = time.monotonic()
+            stamp, value = self._connections
+            if now - stamp >= CONNECTIONS_INTERVAL:
+                value = connections(proc)
+                self._connections = (now, value)
+            return value
+
+        return read_ipc(self._proc, related, cached)
 
     def process(self) -> ProcessStat:
         p = self._proc
@@ -234,13 +268,15 @@ class ProcessStats:
                 out.append(ChildStat(p.pid, self.pid, "", (), "", 0, 0, 0.0, 0.0, 0.0))
         return out
 
-    def threads(self) -> dict[int, ThreadStat]:
+    def threads(self, *, syscalls: bool = True) -> dict[int, ThreadStat]:
         """OS threads keyed by the id ``_remote_debugging`` uses for them.
 
         Empty where the platform cannot provide matching ids (macOS).
+        ``syscalls`` asks for the system call each sleeping thread is in,
+        which Linux reports when the target's memory is readable.
         """
         if LINUX:
-            return _linux_threads(self.pid)
+            return _linux_threads(self.pid, syscalls)
         if not HAS_THREAD_STATS:
             return {}
         try:
@@ -495,7 +531,7 @@ def _linux_limits(pid: int, proc: psutil.Process, cgroup: _CgroupFiles | None) -
     )
 
 
-def _linux_threads(pid: int) -> dict[int, ThreadStat]:
+def _linux_threads(pid: int, syscalls: bool = True) -> dict[int, ThreadStat]:
     try:
         names = os.listdir(f"/proc/{pid}/task")
     except FileNotFoundError as e:
@@ -514,12 +550,25 @@ def _linux_threads(pid: int) -> dict[int, ThreadStat]:
         rparen = raw.rindex(")")
         fields = raw[rparen + 2 :].split()
         # fields[0] is field 3 (state) of the documented layout.
+        state = _LINUX_STATES.get(fields[0], fields[0])
+        syscall = ""
+        if state != "running" and syscalls:
+            # Needs ptrace access like reading memory does. Denied reads
+            # come back as PermissionError, so stop asking after the first.
+            try:
+                with open(f"/proc/{pid}/task/{tid}/syscall") as f:
+                    syscall = f.read().strip()
+            except PermissionError:
+                syscalls = False
+            except OSError:
+                pass
         out[tid] = ThreadStat(
             tid=tid,
             name=raw[lparen + 1 : rparen],
-            state=_LINUX_STATES.get(fields[0], fields[0]),
+            state=state,
             utime=int(fields[11]) / _CLK_TCK,
             stime=int(fields[12]) / _CLK_TCK,
+            syscall=syscall,
         )
     return out
 

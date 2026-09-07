@@ -53,7 +53,7 @@ def web_command(args: argparse.Namespace, pid: int) -> list[str]:
     """
     argv = [sys.executable, "-m", _pkg, str(pid), "-n", str(args.interval)]
     argv += ["--rate", str(args.rate), "--mode", args.mode]
-    for flag in ("stacks", "tasks", "gc", "children", "native"):
+    for flag in ("stacks", "tasks", "gc", "children", "ipc", "native"):
         if getattr(args, f"no_{flag}"):
             argv.append(f"--no-{flag}")
     return argv

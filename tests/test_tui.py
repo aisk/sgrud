@@ -94,6 +94,28 @@ class _NoMonitor:
         pass
 
 
+async def test_tui_ipc_tab(monitor):
+    app = SgrudApp(monitor, interval=0.2)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.5)
+        await pilot.pause()
+        assert app.snapshot is not None and app.snapshot.ipc is not None
+        await pilot.press("7")
+        await pilot.pause()
+        tabs = app.query_one("#tabs", TabbedContent)
+        assert tabs.active == "ipc"
+        table = app.query_one("#ipc-table", DataTable)
+        assert table.has_focus
+        assert table.row_count == len(app.snapshot.ipc.files)
+        info = str(app.query_one("#ipc-info", Static).render())
+        assert info.startswith("fds")
+        await pilot.press("1")
+        await pilot.pause()
+        threads = app.query_one("#threads-table", DataTable)
+        assert "syscall" in [str(c.label) for c in threads.columns.values()]
+
+
 async def test_tui_marks_vanished_thread_stale():
     app = SgrudApp(cast(Monitor, _NoMonitor()), interval=60)
     async with app.run_test(size=(100, 30)) as pilot:

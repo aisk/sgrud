@@ -81,10 +81,40 @@ class Thread:
     cpu_percent: float | None
     #: Leaf frame first.
     frames: tuple[Frame, ...] = ()
+    #: The system call the thread is blocked in, ``None`` when it is
+    #: running, not in one, or the platform does not say (Linux only).
+    syscall: Syscall | None = None
 
     @property
     def is_main(self) -> bool:
         return bool(self.status & ThreadStatus.MAIN_THREAD)
+
+
+@dataclass(frozen=True, slots=True)
+class Syscall:
+    """A system call a thread is blocked in, from ``/proc/<pid>/task/<tid>/syscall``.
+
+    Only the facts the kernel reports: the call and its arguments. ``fd``
+    is the descriptor the call operates on for the calls that take one
+    (read, write, recv, poll on one descriptor, flock, ...), -1 otherwise.
+    ``target`` names what the descriptor is, resolved from the fd table
+    (``pipe:[1234]``, a path, ``socket:[5678]``), "" when unknown.
+    """
+
+    name: str
+    number: int
+    args: tuple[int, ...] = ()
+    fd: int = -1
+    target: str = ""
+
+    def describe(self) -> str:
+        """``read(fd 12 pipe:[48453])`` or just ``futex``."""
+        if self.fd < 0:
+            return self.name
+        what = f"fd {self.fd}"
+        if self.target:
+            what += f" {self.target}"
+        return f"{self.name}({what})"
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,6 +311,124 @@ class ChildProcess:
 
 
 @dataclass(frozen=True, slots=True)
+class OpenFile:
+    """One entry of the target's descriptor table."""
+
+    fd: int
+    #: One of ``pipe``, ``socket``, ``shm``, ``file``, ``anon``, ``other``.
+    #: ``shm`` is POSIX shared memory under ``/dev/shm``, ``anon`` an
+    #: anonymous inode (eventfd, epoll, timerfd, signalfd).
+    kind: str
+    #: What the descriptor refers to: a path, ``pipe:[inode]``,
+    #: ``socket:[inode]``, ``anon_inode:[eventfd]``.
+    target: str
+    #: ``r``, ``w`` or ``rw``. "" where the platform does not say.
+    mode: str = ""
+    #: The pipe or socket inode, 0 for anything else.
+    inode: int = 0
+    #: Pids of the target's parent and descendants that have the same
+    #: pipe or socket open, for a pipe the ones holding the other end
+    #: included. Only Linux resolves this.
+    shared_with: tuple[int, ...] = ()
+    #: For a socket, its addresses as psutil reports them: ``tcp``,
+    #: ``udp`` or ``unix`` plus local address, remote address and state.
+    family: str = ""
+    local: str = ""
+    remote: str = ""
+    status: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class FileLock:
+    """A file lock the target holds or is waiting for, from ``/proc/locks``. Linux only."""
+
+    #: ``flock``, ``posix`` (fcntl record lock) or ``ofd`` (open file description lock).
+    kind: str
+    #: ``read`` or ``write``.
+    mode: str
+    #: The locked file as the target has it open, "" when it does not
+    #: (a lock inherited across exec, say) so only the inode is known.
+    path: str
+    #: ``major:minor:inode`` as the kernel spells it.
+    inode: str
+    #: Byte range, ``end`` -1 for the end of file.
+    start: int = 0
+    end: int = -1
+    #: True when the target is blocked waiting for this lock, in which
+    #: case ``holder`` is the pid holding it. Otherwise the target holds
+    #: it and ``holder`` is the target itself, or -1 for an OFD lock which
+    #: the kernel does not attribute to a pid.
+    waiting: bool = False
+    holder: int = -1
+
+
+@dataclass(frozen=True, slots=True)
+class SharedMapping:
+    """A shared memory object mapped by the target, from ``/proc/<pid>/maps``. Linux only.
+
+    ``multiprocessing.shared_memory`` segments are ``/dev/shm/psm_*``
+    and ``multiprocessing`` locks, semaphores and queues each map one
+    ``/dev/shm/sem.*`` page that is unlinked right after creation.
+    """
+
+    path: str
+    size: int
+    #: ``shm`` for shared memory, ``sem`` for a POSIX semaphore.
+    kind: str
+    deleted: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class IPC:
+    """What the target has open and shares with other processes."""
+
+    #: Descriptors in use and the soft ``RLIMIT_NOFILE`` (0 when unknown).
+    #: Windows counts handles instead.
+    num_fds: int
+    max_fds: int = 0
+    #: The descriptor table, ordered by fd. On Linux every descriptor up
+    #: to :data:`sgrud.ipc.MAX_FILES` is listed; elsewhere psutil supplies
+    #: regular files and sockets only.
+    files: tuple[OpenFile, ...] = ()
+    locks: tuple[FileLock, ...] = ()
+    mappings: tuple[SharedMapping, ...] = ()
+
+    @property
+    def truncated(self) -> bool:
+        """Whether descriptors were left out of :attr:`files`."""
+        return len(self.files) < self.num_fds and len(self.files) > 0
+
+    def counts(self) -> dict[str, int]:
+        """Descriptors per kind, in the order the kinds are worth reading."""
+        out: dict[str, int] = {}
+        for f in self.files:
+            out[f.kind] = out.get(f.kind, 0) + 1
+        order = ("pipe", "socket", "shm", "file", "anon", "other")
+        return {k: out[k] for k in order if k in out}
+
+    def file(self, fd: int) -> OpenFile | None:
+        for f in self.files:
+            if f.fd == fd:
+                return f
+        return None
+
+    def same_object(self, fd: int) -> tuple[OpenFile, ...]:
+        """Other descriptors of the target that refer to the same pipe or socket.
+
+        For a pipe that is the process's own copy of the other end, or a
+        duplicate of the same end.
+        """
+        f = self.file(fd)
+        if f is None or not f.inode:
+            return ()
+        return tuple(o for o in self.files if o.inode == f.inode and o.fd != fd)
+
+    @property
+    def semaphores(self) -> int:
+        return sum(m.kind == "sem" for m in self.mappings)
+
+
+@dataclass(frozen=True, slots=True)
 class Snapshot:
     """A consistent-as-practical picture of the target at one instant."""
 
@@ -291,6 +439,8 @@ class Snapshot:
     gc: tuple[GCGeneration, ...] = ()
     #: Every descendant of the target, parents before children.
     children: tuple[ChildProcess, ...] = ()
+    #: Open descriptors, locks and shared memory, ``None`` when not collected.
+    ipc: IPC | None = None
     #: Sections that could not be collected, mapped to the error text.
     errors: dict[str, str] = field(default_factory=dict)
 

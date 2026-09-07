@@ -10,7 +10,17 @@ from dataclasses import dataclass
 
 from . import osproc
 from .errors import AttachError, ProcessExited
-from .models import ChildProcess, GCGeneration, Process, Snapshot, Task, Thread, ThreadStatus
+from .ipc import decode_syscall
+from .models import (
+    IPC,
+    ChildProcess,
+    GCGeneration,
+    Process,
+    Snapshot,
+    Task,
+    Thread,
+    ThreadStatus,
+)
 from .remote import (
     UNWINDER_MODES,
     GCRecord,
@@ -378,6 +388,7 @@ class Monitor:
         tasks: bool = True,
         gc: bool = True,
         children: bool = True,
+        ipc: bool = True,
     ) -> Snapshot:
         """Collect one snapshot. Sections that fail are reported in ``errors``."""
         self._check_alive()
@@ -385,7 +396,7 @@ class Monitor:
         errors: dict[str, str] = {}
         try:
             stat = self._stats.process()
-            os_threads = self._stats.threads()
+            os_threads = self._stats.threads(syscalls=ipc and self.limited is None)
         except ProcessLookupError as e:
             raise ProcessExited(self.pid) from e
 
@@ -428,6 +439,26 @@ class Monitor:
             except Exception as e:
                 errors["stacks"] = f"{type(e).__name__}: {e}"
 
+        child_list: tuple[ChildProcess, ...] = ()
+        if children:
+            try:
+                child_list = self._children(now)
+            except ProcessLookupError as e:
+                raise ProcessExited(self.pid) from e
+            except Exception as e:
+                errors["children"] = f"{type(e).__name__}: {e}"
+
+        ipc_info: IPC | None = None
+        if ipc:
+            try:
+                related = [self._stats.parent_pid()] + [c.pid for c in child_list]
+                ipc_info = self._stats.ipc(pid for pid in related if pid > 1)
+            except ProcessLookupError as e:
+                raise ProcessExited(self.pid) from e
+            except Exception as e:
+                errors["ipc"] = f"{type(e).__name__}: {e}"
+        files_by_fd = {f.fd: f for f in ipc_info.files} if ipc_info is not None else None
+
         # Where the OS cannot name threads by the same id as the interpreter
         # (macOS) the interpreter's own thread list is all there is. Main
         # thread first, then the other interpreter threads, then threads the
@@ -463,6 +494,7 @@ class Monitor:
                     system_time=tstat.stime if tstat else 0.0,
                     cpu_percent=cpu_percent,
                     frames=frames,
+                    syscall=decode_syscall(tstat.syscall, files_by_fd) if tstat else None,
                 )
             )
         for gone in set(self._thread_cpu) - set(tids):
@@ -490,15 +522,6 @@ class Monitor:
             except Exception as e:
                 errors["gc"] = f"{type(e).__name__}: {e}"
 
-        child_list: tuple[ChildProcess, ...] = ()
-        if children:
-            try:
-                child_list = self._children(now)
-            except ProcessLookupError as e:
-                raise ProcessExited(self.pid) from e
-            except Exception as e:
-                errors["children"] = f"{type(e).__name__}: {e}"
-
         return Snapshot(
             timestamp=time.time(),
             process=process,
@@ -506,6 +529,7 @@ class Monitor:
             tasks=task_list,
             gc=gc_list,
             children=child_list,
+            ipc=ipc_info,
             errors=errors,
         )
 

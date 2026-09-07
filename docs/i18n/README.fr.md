@@ -49,8 +49,14 @@ sgrud probe PID                     exécute un script dans la cible : seuils du
 sgrud probe PID -t 10               compte aussi les objets suivis par type, les dix plus fréquents
 ```
 
-`--no-stacks`, `--no-tasks` et `--no-gc` retirent de l'interface ou du
-dump les sections dont vous n'avez pas besoin.
+`--no-stacks`, `--no-tasks`, `--no-gc`, `--no-children` et `--no-ipc` retirent
+de l'interface ou du dump les sections dont vous n'avez pas besoin.
+
+`examples/demo_app.py` met quelque chose sur chaque onglet. Il fait tourner
+des threads occupés et bloqués, un arbre de tâches asyncio, des workers
+`multiprocessing`, des pipes, des sockets, de la mémoire partagée et un
+verrou de fichier détenu par un processus enfant. Lancez-le et pointez sgrud
+sur le pid qu'il affiche.
 
 ### Modes d'échantillonnage
 
@@ -92,7 +98,7 @@ enregistrement sous l'interface, à travers les changements de mode.
 
 | Touche | Action |
 | --- | --- |
-| `1`-`6`, `tab`, `shift+tab` | changer d'onglet |
+| `1`-`7`, `tab`, `shift+tab` | changer d'onglet |
 | `p` / `r` | pause / rafraîchir |
 | `+` / `-` | modifier l'intervalle de rafraîchissement |
 | `q` | quitter |
@@ -123,6 +129,19 @@ la cible avec leur CPU et leur mémoire, en marquant ceux qui sont des
 interpréteurs Python, de sorte qu'un pool `multiprocessing` ou un worker
 lancé par un superviseur se voit d'un coup d'œil. Chacun d'eux peut être
 inspecté avec un second `sgrud PID`.
+
+L'onglet IPC est fait pour le processus qui se bloque : il liste chaque
+descripteur ouvert par la cible, tubes, sockets avec leurs adresses et leur
+état, mémoire partagée, fichiers, et pour chaque tube lequel du parent et des
+enfants de la cible tient l'autre extrémité. Au-dessus du tableau figurent le
+nombre de descripteurs face à sa limite, les segments de mémoire partagée et
+les sémaphores `multiprocessing` mappés, ainsi que les verrous de fichier que
+la cible détient ou, en rouge, qu'elle attend, avec le pid qui les tient. Sous
+Linux l'onglet Threads ajoute l'appel système dans lequel un thread endormi se
+trouve et le descripteur concerné, `read(fd 4)` par exemple, et le tableau IPC
+nomme le thread à côté de ce descripteur. Seul ce que rapporte le noyau est
+affiché : une attente `futex` est un verrou ou le GIL, et la pile Python à
+côté dit lequel.
 
 ![L'onglet Tasks, montrant l'arbre des tâches asyncio et ce que chaque tâche attend](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
 
@@ -221,16 +240,24 @@ c'est là que les plateformes diffèrent.
   qui est ce qui marque un thread comme étant sur le CPU en mode wall, et la
   mémoire complète : la part anonyme et la part fichier du rss, USS et PSS, le
   tas brk et les mappages anonymes, les huge pages transparentes, le taux de
-  défauts de page, la limite mémoire du cgroup et le score OOM.
+  défauts de page, la limite mémoire du cgroup et le score OOM. C'est aussi la
+  seule plateforme avec l'image IPC complète : les tubes et leur autre
+  extrémité, la mémoire partagée, les verrous de fichier et l'appel système
+  dans lequel chaque thread est bloqué (ce qui demande le même accès que la
+  lecture de la mémoire, et une table d'appels que sgrud a pour x86_64,
+  aarch64, riscv64 et loongarch64 ; ailleurs les appels sont affichés par
+  numéro).
 - **Windows** a les noms de threads et le temps CPU par thread mais pas d'état
   d'ordonnancement, donc les threads affichent `?` au lieu de `cpu` / `idle`
   en mode wall. La mémoire comprend `rss`, `vms`, le pic du working set, les
-  octets privés, USS et le taux de défauts de page.
+  octets privés, USS et le taux de défauts de page. L'IPC se limite au nombre
+  de handles, aux fichiers et sockets ouverts, sans numéros de descripteur.
 - **macOS** ne peut pas faire correspondre les threads du système aux id de
   threads de l'interpréteur, donc les threads apparaissent sans nom ni
   chiffres CPU. La mémoire comprend `rss`, `vms`, USS et le taux de défauts de
-  page. Lire la mémoire d'un autre processus demande root, lancez donc sgrud
-  avec `sudo`.
+  page. L'IPC se limite au nombre de descripteurs, aux fichiers et sockets
+  ouverts. Lire la mémoire d'un autre processus demande root, lancez donc
+  sgrud avec `sudo`.
 
 ## Permissions
 

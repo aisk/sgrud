@@ -278,3 +278,102 @@ async def test_web_page_urls_follow_the_host_header():
         html = await resp.text()
     assert 'src="http://box.example:9000/static/js/textual.js"' in html
     assert 'websocket-url="ws://box.example:9000/ws"' in html
+
+
+def test_decode_syscall_reports_the_call_and_its_descriptor():
+    from sgrud import ipc
+    from sgrud.models import OpenFile
+
+    files = {4: OpenFile(fd=4, kind="pipe", target="pipe:[51605]", mode="r", inode=51605)}
+    read = ipc.decode_syscall("0 0x4 0x7f 0x1 0x0 0x0 0x0 0x7ffd 0x7fa1", files)
+    futex = ipc.decode_syscall("202 0x1 0x189 0x0 0x0 0x0 0xffffffff 0x7ffd 0x7fa1", files)
+    if ipc.SYSCALL_NAMES.get(0) == "read":  # x86_64
+        assert read is not None and read.name == "read"
+        assert read.fd == 4 and read.target == "pipe:[51605]"
+        assert read.describe() == "read(fd 4 pipe:[51605])"
+        assert futex is not None and futex.name == "futex" and futex.fd == -1
+        assert futex.describe() == "futex"
+    elif ipc.SYSCALL_NAMES:
+        assert read is not None and read.number == 0
+    assert ipc.decode_syscall("running", files) is None
+    assert ipc.decode_syscall("-1 0x7ffd 0x7fa1", files) is None
+    assert ipc.decode_syscall("", files) is None
+    unknown = ipc.decode_syscall("9999 0x4 0x0 0x0 0x0 0x0 0x0 0x0 0x0", files)
+    assert unknown is not None and unknown.name == "syscall 9999" and unknown.fd == -1
+
+
+def test_syscall_tables_agree_on_the_calls_that_take_a_descriptor():
+    from sgrud import ipc
+
+    assert ipc._FD_CALLS <= set(ipc._SYSCALLS)
+    x86 = [n for n, _ in ipc._SYSCALLS.values() if n is not None]
+    generic = [n for _, n in ipc._SYSCALLS.values() if n is not None]
+    assert len(x86) == len(set(x86)) and len(generic) == len(set(generic))
+
+
+def test_parse_locks_finds_held_and_waited_locks():
+    from sgrud.ipc import parse_locks
+
+    text = """\
+1: FLOCK  ADVISORY  WRITE 7288 08:20:775119 0 EOF
+2: POSIX  ADVISORY  WRITE 1234 08:20:775200 0 EOF
+2: -> POSIX  ADVISORY  WRITE 7288 08:20:775200 0 EOF
+3: POSIX  ADVISORY  READ 7288 08:20:775300 100 199
+4: OFDLCK ADVISORY  WRITE -1 08:20:775400 0 EOF
+5: OFDLCK ADVISORY  WRITE -1 08:20:775500 0 EOF
+6: FLOCK  ADVISORY  WRITE 999 08:20:775119 0 EOF
+"""
+    paths = {"08:20:775119": "/tmp/a.lock", "08:20:775400": "/tmp/d.lock"}
+    locks = parse_locks(text, 7288, lambda inode: paths.get(inode, ""))
+    assert [(lk.kind, lk.mode, lk.waiting, lk.holder) for lk in locks] == [
+        ("flock", "write", False, 7288),
+        ("posix", "write", True, 1234),
+        ("posix", "read", False, 7288),
+        ("ofd", "write", False, -1),
+    ]
+    assert locks[0].path == "/tmp/a.lock" and locks[1].path == ""
+    assert (locks[2].start, locks[2].end) == (100, 199) and locks[0].end == -1
+    assert locks[3].path == "/tmp/d.lock"  # the OFD lock on a file nobody has open is left out
+
+
+def test_ipc_counts_and_same_object():
+    from sgrud.format import describe_file, ipc_summary
+    from sgrud.models import IPC, FileLock, OpenFile, SharedMapping
+
+    files = (
+        OpenFile(fd=3, kind="pipe", target="pipe:[10]", mode="r", inode=10),
+        OpenFile(fd=4, kind="pipe", target="pipe:[10]", mode="w", inode=10),
+        OpenFile(
+            fd=5,
+            kind="socket",
+            target="socket:[11]",
+            mode="rw",
+            inode=11,
+            family="tcp",
+            local="127.0.0.1:80",
+            remote="10.0.0.1:5",
+            status="ESTABLISHED",
+        ),
+        OpenFile(fd=6, kind="file", target="/tmp/x", mode="w"),
+    )
+    ipc = IPC(
+        num_fds=40,
+        max_fds=1024,
+        files=files,
+        locks=(FileLock("flock", "write", "/tmp/x", "08:20:1", waiting=True, holder=42),),
+        mappings=(
+            SharedMapping("/dev/shm/psm_1", 4096, "shm"),
+            SharedMapping("/dev/shm/sem.a", 4096, "sem", deleted=True),
+        ),
+    )
+    assert ipc.counts() == {"pipe": 2, "socket": 1, "file": 1}
+    assert ipc.truncated  # 40 descriptors, 4 listed
+    assert [o.fd for o in ipc.same_object(3)] == [4]
+    assert ipc.same_object(6) == ()
+    assert ipc.semaphores == 1
+    assert describe_file(files[2]) == "tcp 127.0.0.1:80 -> 10.0.0.1:5 established"
+    lines = ipc_summary(ipc)
+    assert lines[0].startswith("fds      40 of 1024 (4%)   pipe 2  socket 1  file 1")
+    assert "first 4 listed" in lines[0]
+    assert lines[1] == "shared   /dev/shm/psm_1 4.0 KiB   semaphores 1"
+    assert lines[2] == "lock     flock write /tmp/x  WAITING for pid 42"
