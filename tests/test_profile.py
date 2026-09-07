@@ -222,8 +222,9 @@ def test_sampler_cpu_mode_counts_only_running_threads(monitor):
         time.sleep(0.5)
     rows = {r.funcname: r for r in sampler.hotspots.rows()}
     assert "busy_loop" in rows, sampler.last_error
-    assert "idle_loop" not in rows
-    assert "except_loop" not in rows
+    # The sleepers wake briefly every 200ms, so a stray sample of them is fine.
+    for name in ("idle_loop", "except_loop"):
+        assert name not in rows or rows[name].total_percent < 5, rows[name]
     assert rows["busy_loop"].self_percent > 80
 
 

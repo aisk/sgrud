@@ -1102,7 +1102,7 @@ class SgrudApp(App[int]):
         table.display = True
         waiting = _waiting_threads(snap)
         table.clear()
-        for f in ipc.files:
+        for i, f in enumerate(ipc.files):
             blocked = ""
             if f.fd in waiting:
                 t, name = waiting[f.fd]
@@ -1114,7 +1114,7 @@ class SgrudApp(App[int]):
                 describe_file(f),
                 ", ".join(map(str, f.shared_with)),
                 blocked,
-                key=f"{f.fd}:{f.target}",
+                key=f"{i}:{f.fd}:{f.target}",
             )
 
     def _sync_thread_filters(self, snap: Snapshot) -> None:
