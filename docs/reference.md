@@ -186,7 +186,7 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
 
 `Monitor.stream(interval)` yields snapshots until the target exits, then raises `ProcessExited`. CPU percentages need two snapshots, so the first one reports `None`. Pass `require_full=True` to `Monitor.attach` to fail instead of degrading when the [permissions](#permissions) are missing.
 
-For profiling, `Sampler` runs `Monitor.sample_stacks()` in a background thread and feeds a `Hotspots` aggregator. A `Recorder` writes the samples in any of the [output formats](#output-formats):
+For profiling, `Sampler` calls `Monitor.sample(mode)` in a background thread and feeds a `Hotspots` aggregator. A `Recorder` writes the samples in any of the [output formats](#output-formats):
 
 ```python
 from sgrud.sampler import Sampler

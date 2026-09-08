@@ -22,7 +22,6 @@ from .models import (
     ThreadStatus,
 )
 from .remote import (
-    UNWINDER_MODES,
     GCRecord,
     RawSample,
     RemoteInspector,
@@ -30,6 +29,7 @@ from .remote import (
     build_gc,
     interpreter_pid,
     is_python_process,
+    unwinder_mode,
 )
 
 #: Collections kept per generation across snapshots.
@@ -111,7 +111,6 @@ class _GCTracker:
         return build_gc(
             (r for slots in self._records.values() for r in slots.values()),
             now_ns=now_ns,
-            limit=self.limit,
             rates=rates,
         )
 
@@ -152,7 +151,7 @@ class Monitor:
             cache_frames = not gc_markers
         self.pid = pid
         self._child = child
-        # One unwinder per sampling mode, created on demand. The unwinder
+        # One unwinder per unwinder mode, created on demand. The unwinder
         # decides which threads a mode includes, so a mode is a property
         # of the unwinder rather than of a read.
         self._inspectors: dict[str, RemoteInspector] = {}
@@ -194,7 +193,6 @@ class Monitor:
         When ``pid`` is a launcher whose only child is the interpreter (a
         Windows venv's ``python.exe``) the child is attached instead.
         """
-        osproc.ensure_supported()
         if not osproc.pid_exists(pid):
             raise ProcessExited(pid)
         hint = access_hint(pid)
@@ -292,22 +290,22 @@ class Monitor:
         self.close()
 
     def _get_inspector(self, mode: str = "wall") -> RemoteInspector:
+        """The inspector serving sampling ``mode``, built on first use."""
         if self.limited is not None:
             raise AttachError(self.pid, "limited mode", self.limited)
-        if mode not in UNWINDER_MODES:
-            raise ValueError(f"mode must be one of {tuple(UNWINDER_MODES)}")
+        key = unwinder_mode(mode)
         with self._lock:
-            inspector = self._inspectors.get(mode)
+            inspector = self._inspectors.get(key)
             if inspector is None:
-                inspector = RemoteInspector(self.pid, mode=mode, **self._inspector_opts)
-                self._inspectors[mode] = inspector
+                inspector = RemoteInspector(self.pid, mode=key, **self._inspector_opts)
+                self._inspectors[key] = inspector
             return inspector
 
     def sample(self, mode: str = "wall", *, retries: int = 5) -> RawSample:
         """One read of the stacks (or, in ``async`` mode, the tasks), unconverted.
 
         This is what a profiler wants to call hundreds of times per second.
-        ``mode`` is one of :data:`sgrud.profile.MODES` and decides which
+        ``mode`` is one of :data:`sgrud.remote.MODES` and decides which
         threads the read includes. The result converts to sgrud's types
         with :meth:`RawSample.stacks` or :meth:`RawSample.tasks` and can be
         recorded as is, see :mod:`sgrud.export`. A read torn by the target
@@ -317,31 +315,12 @@ class Monitor:
         inspector = self._get_inspector(mode)
         with self._lock:
             try:
-                return inspector.sample(retries)
+                return inspector.sample(retries, tasks=mode == "async")
             except ProcessExited:
                 raise
             except Exception:
                 self._check_alive()
                 raise
-
-    def sample_stacks(self, mode: str = "wall") -> dict[int, tuple[int, ThreadStatus, tuple]]:
-        """Read only the Python stacks, as fast as possible.
-
-        Returns a mapping of OS thread id to (interpreter_id, status, frames).
-        Raises ProcessExited when the target is gone.
-        """
-        if mode == "async":
-            raise ValueError("async mode samples tasks, use sample_tasks()")
-        return self.sample(mode).stacks()
-
-    def sample_tasks(self) -> tuple[Task, ...]:
-        """Read only the asyncio tasks, as fast as possible.
-
-        The async-mode counterpart of :meth:`sample_stacks`. Returns an
-        empty tuple when the target has not imported asyncio. Raises
-        ProcessExited when the target is gone.
-        """
-        return self.sample("async").tasks()
 
     def probe(self, *, types: int = 0, allocations: int = 10, timeout: float = 5.0):
         """Run a script inside the target, see :func:`sgrud.probe.probe`.
@@ -365,7 +344,7 @@ class Monitor:
         limited mode or before the first read.
         """
         with self._lock:
-            inspector = self._inspectors.get(mode)
+            inspector = self._inspectors.get(unwinder_mode(mode))
             return inspector.stats() if inspector is not None else {}
 
     def _check_alive(self) -> None:
@@ -452,7 +431,7 @@ class Monitor:
         if stacks and inspector is not None:
             try:
                 with self._lock:
-                    remote = inspector.stacks()
+                    remote = inspector.sample().stacks()
             except ProcessExited:
                 raise
             except Exception as e:
@@ -519,11 +498,11 @@ class Monitor:
         for gone in set(self._thread_cpu) - set(tids):
             del self._thread_cpu[gone]
 
-        task_list = ()
+        task_list: tuple[Task, ...] = ()
         if tasks and inspector is not None:
             try:
                 with self._lock:
-                    task_list = inspector.tasks()
+                    task_list = inspector.sample(tasks=True).tasks()
             except ProcessExited:
                 raise
             except Exception as e:

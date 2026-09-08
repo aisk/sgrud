@@ -26,7 +26,7 @@ from .errors import SgrudError
 from .export import FORMATS
 from .format import format_snapshot
 from .monitor import Monitor
-from .profile import MODES
+from .remote import MODES
 
 if TYPE_CHECKING:
     from .sampler import Sampler
@@ -307,14 +307,20 @@ def _profile(args: argparse.Namespace) -> int:
         return 0
 
 
-def _print_footer(monitor: Monitor, sampler: Sampler) -> None:
+def _print_footer(monitor: Monitor, sampler: Sampler, *, stats: bool = True) -> None:
+    """Failed samples and read counters on stdout, an exited target on stderr.
+
+    ``stats`` is off for machine readable output, which stdout then
+    belongs to entirely.
+    """
     from .format import format_read_stats
 
-    if sampler.errors:
-        print(f"({sampler.errors} samples failed, last: {sampler.last_error})")
-    stats = format_read_stats(monitor.read_stats(sampler.hotspots.mode))
     if stats:
-        print(stats)
+        if sampler.errors:
+            print(f"({sampler.errors} samples failed, last: {sampler.last_error})")
+        text = format_read_stats(monitor.read_stats(sampler.mode))
+        if text:
+            print(text)
     if sampler.exited is not None:
         print(f"sgrud: {sampler.exited}", file=sys.stderr)
 
@@ -337,7 +343,7 @@ def _print_hotspots(monitor: Monitor, sampler: Sampler, args: argparse.Namespace
                 {
                     "samples": hot.samples,
                     "rate": hot.rate(),
-                    "mode": hot.mode,
+                    "mode": sampler.mode,
                     "errors": sampler.errors,
                     "rows": rows,
                 }
@@ -346,13 +352,10 @@ def _print_hotspots(monitor: Monitor, sampler: Sampler, args: argparse.Namespace
     else:
         print(
             format_hotspots(
-                hot.rows(sort=args.sort), samples=hot.samples, rate=hot.rate(), mode=hot.mode
+                hot.rows(sort=args.sort), samples=hot.samples, rate=hot.rate(), mode=sampler.mode
             )
         )
-        _print_footer(monitor, sampler)
-        return 0
-    if sampler.exited is not None:
-        print(f"sgrud: {sampler.exited}", file=sys.stderr)
+    _print_footer(monitor, sampler, stats=not (args.folded or args.json))
     return 0
 
 

@@ -17,9 +17,17 @@ from .errors import ProcessExited, SgrudError
 from .export import Recorder
 from .monitor import Monitor
 from .profile import Hotspots
+from .remote import MODES
 
 
 class Sampler:
+    """Samples ``monitor`` ``rate`` times a second in sampling ``mode``.
+
+    ``mode`` is one of :data:`sgrud.remote.MODES` and may be changed while
+    the sampler runs, the next sample uses it. Samples of different modes
+    are not comparable, so reset :attr:`hotspots` when switching.
+    """
+
     def __init__(
         self,
         monitor: Monitor,
@@ -31,8 +39,11 @@ class Sampler:
     ):
         if rate <= 0:
             raise ValueError("rate must be positive")
+        if mode not in MODES:
+            raise ValueError(f"mode must be one of {MODES}")
         self.monitor = monitor
-        self.hotspots = hotspots if hotspots is not None else Hotspots(mode)
+        self.hotspots = hotspots if hotspots is not None else Hotspots()
+        self.mode = mode
         self.rate = rate
         self.recorders = list(recorders)
         self.errors = 0
@@ -75,7 +86,7 @@ class Sampler:
 
     def _sample(self) -> None:
         # The mode is read on every sample so the UI can switch it live.
-        mode = self.hotspots.mode
+        mode = self.mode
         try:
             sample = self.monitor.sample(mode)
         except Exception:

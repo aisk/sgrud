@@ -87,17 +87,17 @@ def test_sampler_notices_exit():
     assert not sampler.running
 
 
-def test_hotspots_gil_mode_filters_by_status():
-    hot = Hotspots("gil")
+def test_hotspots_add_takes_raw_stacks():
+    hot = Hotspots()
     hot.add(
         {
             1: (0, ThreadStatus.HAS_GIL, (_f("running"),)),
             2: (0, ThreadStatus.NONE, (_f("waiting"),)),
+            3: (0, ThreadStatus.NONE, ()),
         }
     )
-    names = [r.funcname for r in hot.rows()]
-    assert names == ["running"]
-    assert hot.thread_ids == [1]
+    assert sorted(r.funcname for r in hot.rows()) == ["running", "waiting"]
+    assert hot.thread_ids == [1, 2]
 
 
 def test_sampler_gil_mode_ignores_sleepers(monitor):
@@ -182,7 +182,7 @@ def test_task_stacks_survive_cycles():
 
 
 def test_hotspots_async_mode_counts_each_task():
-    hot = Hotspots("async")
+    hot = Hotspots()
     root = Task(1, "root", 100, (_f("main"),))
     leaves = [Task(i, f"w{i}", 100, (_f("sleep"), _f("work")), (Awaiter(1),)) for i in (2, 3)]
     hot.add_tasks([root, *leaves])
@@ -237,19 +237,6 @@ def test_sampler_exception_mode_sees_handlers(monitor):
     assert rows["except_loop"].total_percent == 100.0
 
 
-def test_hotspots_cpu_and_exception_modes_filter_by_status():
-    sample = {
-        1: (0, ThreadStatus.ON_CPU, (_f("running"),)),
-        2: (0, ThreadStatus.HAS_EXCEPTION, (_f("handling"),)),
-        3: (0, ThreadStatus.NONE, (_f("waiting"),)),
-    }
-    cpu, exc = Hotspots("cpu"), Hotspots("exception")
-    cpu.add(sample)
-    exc.add(sample)
-    assert [r.funcname for r in cpu.rows()] == ["running"]
-    assert [r.funcname for r in exc.rows()] == ["handling"]
-
-
 def test_raw_samples_convert_and_count_reads(monitor):
     sample = monitor.sample()
     stacks = sample.stacks()
@@ -258,8 +245,14 @@ def test_raw_samples_convert_and_count_reads(monitor):
         sample.tasks()
     tasks = monitor.sample("async")
     assert any(t.name == "branch-0" for t in tasks.tasks())
+    with pytest.raises(ValueError):
+        tasks.stacks()
+    with pytest.raises(ValueError):
+        monitor.sample("nope")
     stats = monitor.read_stats()
     assert stats["memory_reads"] > 0 and stats["memory_bytes_read"] > 0
+    # Task reads go through the wall unwinder, so they count there.
+    assert monitor.read_stats("async") == stats
     assert format_read_stats(stats).startswith("read ")
     assert format_read_stats({}) == ""
     assert monitor.read_stats("cpu") == {} or monitor.read_stats("cpu")["memory_reads"] >= 0

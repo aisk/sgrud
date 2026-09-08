@@ -54,7 +54,8 @@ from .format import (
 from .models import GCCollection, Snapshot, Task, Thread, ThreadStatus
 from .monitor import Monitor
 from .probe import ProbeResult
-from .profile import MODES, CallNode, Hotspots
+from .profile import CallNode, Hotspots
+from .remote import MODES
 from .sampler import Sampler
 
 HISTORY = 120
@@ -528,13 +529,17 @@ class SgrudApp(App[int]):
         """``record`` is a path for a binary recording of every sample taken."""
         super().__init__()
         self.monitor = monitor
-        self.hotspots = Hotspots(sample_mode)
+        self.hotspots = Hotspots()
+        #: The sampling mode, kept here too so it shows without a sampler.
+        self.sample_mode = sample_mode
         self.sampler: Sampler | None = None
         if sample_rate > 0 and monitor.limited is None:
             recorders = []
             if record:
                 recorders.append(Recorder(record, "binary", interval=1 / sample_rate))
-            self.sampler = Sampler(monitor, self.hotspots, rate=sample_rate, recorders=recorders)
+            self.sampler = Sampler(
+                monitor, self.hotspots, rate=sample_rate, mode=sample_mode, recorders=recorders
+            )
         self.hot_sort = "self"
         self.hot_thread: int | None = None
         self._hot_options: tuple[int, ...] = ()
@@ -742,8 +747,10 @@ class SgrudApp(App[int]):
             self._update_hotspots(self.snapshot)
 
     def action_toggle_mode(self) -> None:
+        self.sample_mode = MODES[(MODES.index(self.sample_mode) + 1) % len(MODES)]
+        if self.sampler is not None:
+            self.sampler.mode = self.sample_mode
         # Samples are not comparable across modes, so start over.
-        self.hotspots.mode = MODES[(MODES.index(self.hotspots.mode) + 1) % len(MODES)]
         self.action_clear_hotspots()
 
     def action_probe(self) -> None:
@@ -1142,7 +1149,7 @@ class SgrudApp(App[int]):
             info.append(f"{state} at {hot.rate():.0f}/s, {hot.samples} samples")
             if self.sampler.errors:
                 info.append(f", {self.sampler.errors} failed", "yellow")
-        info.append(f"  mode: {hot.mode}", "cyan")
+        info.append(f"  mode: {self.sample_mode}", "cyan")
         return info
 
     def _update_hotspots(self, snap: Snapshot) -> None:

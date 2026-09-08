@@ -1,9 +1,9 @@
 """Aggregate stack samples into per-function hotspot counts.
 
-The aggregator is independent of how samples are obtained: feed it the
-mapping returned by :meth:`sgrud.Monitor.sample_stacks` (or the ``threads``
-of a :class:`~sgrud.models.Snapshot`) and read back sorted rows. It is safe
-to feed from one thread and read from another.
+The aggregator is independent of how samples are obtained and of the
+sampling mode: feed it the stacks of a :class:`~sgrud.remote.RawSample`,
+which already holds only the threads the mode selects, and read back
+sorted rows. It is safe to feed from one thread and read from another.
 """
 
 from __future__ import annotations
@@ -15,29 +15,13 @@ from collections.abc import Hashable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 
 from .format import short_path
-from .models import Frame, Task, Thread, ThreadStatus
+from .models import Frame, Task
 
 FunctionKey = tuple[str, str]  # (funcname, filename)
 StackKey = tuple[FunctionKey, ...]  # outermost function first
 
 #: The marker frame the unwinder inserts where a garbage collection is running.
 GC_KEY: FunctionKey = ("<GC>", "~")
-
-#: ``wall`` counts every thread that has a Python stack. ``gil`` counts only
-#: the thread holding the GIL, which is where CPU time goes in CPython.
-#: ``cpu`` counts threads the OS has on a core, so C code that released the
-#: GIL still counts and a thread waiting for the GIL does not.
-#: ``exception`` counts only threads handling an exception, to show where
-#: exceptions are raised and caught. ``async`` samples asyncio tasks
-#: instead of threads: every task counts, suspended ones included, with
-#: its coroutine stack joined to the stacks of the tasks awaiting it.
-MODES = ("wall", "gil", "cpu", "exception", "async")
-
-_MODE_STATUS = {
-    "gil": ThreadStatus.HAS_GIL,
-    "cpu": ThreadStatus.ON_CPU,
-    "exception": ThreadStatus.HAS_EXCEPTION,
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,10 +108,7 @@ class _ThreadCounts:
 class Hotspots:
     """Counts self and total samples per function, per thread."""
 
-    def __init__(self, mode: str = "wall") -> None:
-        if mode not in MODES:
-            raise ValueError(f"mode must be one of {MODES}")
-        self.mode = mode
+    def __init__(self) -> None:
         self._lock = threading.Lock()
         self._threads: dict[int, _ThreadCounts] = {}
         self.samples = 0
@@ -141,19 +122,9 @@ class Hotspots:
             self.started = time.monotonic()
             self.last_sample_at = None
 
-    def _wanted(self, status: object) -> bool:
-        flag = _MODE_STATUS.get(self.mode)
-        return flag is None or bool(ThreadStatus(status) & flag)
-
     def add(self, stacks: Mapping[int, tuple[int, object, tuple[Frame, ...]]]) -> None:
-        """Record one sample from :meth:`Monitor.sample_stacks`."""
-        self.add_frames(
-            {tid: frames for tid, (_, status, frames) in stacks.items() if self._wanted(status)}
-        )
-
-    def add_threads(self, threads: Iterable[Thread]) -> None:
-        """Record one sample from the threads of a Snapshot."""
-        self.add_frames({t.tid: t.frames for t in threads if t.frames and self._wanted(t.status)})
+        """Record one sample as :meth:`sgrud.remote.RawSample.stacks` returns it."""
+        self.add_frames({tid: frames for tid, (_, _, frames) in stacks.items()})
 
     def add_tasks(self, tasks: Iterable[Task]) -> None:
         """Record one sample of asyncio tasks, see :func:`task_stacks`."""
@@ -195,11 +166,6 @@ class Hotspots:
     def thread_ids(self) -> list[int]:
         with self._lock:
             return sorted(self._threads)
-
-    def thread_samples(self, tid: int) -> int:
-        with self._lock:
-            counts = self._threads.get(tid)
-            return counts.samples if counts else 0
 
     def rate(self) -> float:
         """Achieved samples per second since the last reset."""

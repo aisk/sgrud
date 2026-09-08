@@ -10,7 +10,6 @@ Requires the 3.15 API (thread status flags, GC stats, native frames).
 from __future__ import annotations
 
 import sys
-import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -191,23 +190,43 @@ def _translate_attach_error(pid: int, exc: BaseException) -> AttachError:
     return AttachError(pid, text, hint, transient=transient)
 
 
-#: Sampling modes and the unwinder mode each one uses. The unwinder drops
-#: threads that do not match the mode, so ``gil`` reads only the GIL
-#: holder, ``cpu`` only threads the OS has on a core and ``exception``
-#: only threads handling an exception. ``async`` reads asyncio tasks.
-UNWINDER_MODES = {"wall": 0, "cpu": 1, "gil": 2, "exception": 4, "async": 0}
+#: The sampling modes, in the order the TUI cycles through them.
+#:
+#: ``wall`` counts every thread that has a Python stack. ``gil`` counts only
+#: the thread holding the GIL, which is where CPU time goes in CPython.
+#: ``cpu`` counts threads the OS has on a core, so C code that released the
+#: GIL still counts and a thread waiting for the GIL does not.
+#: ``exception`` counts only threads handling an exception, to show where
+#: exceptions are raised and caught. ``async`` samples asyncio tasks
+#: instead of threads: every task counts, suspended ones included, with
+#: its coroutine stack joined to the stacks of the tasks awaiting it.
+MODES = ("wall", "gil", "cpu", "exception", "async")
+
+#: The unwinder mode behind each stack sampling mode. The unwinder drops
+#: the threads that do not match, so the choice of threads is made in C.
+#: ``async`` is not here: it reads the task graph through a ``wall``
+#: unwinder, see :func:`unwinder_mode`.
+UNWINDER_MODES = {"wall": 0, "cpu": 1, "gil": 2, "exception": 4}
+
+
+def unwinder_mode(mode: str) -> str:
+    """The :data:`UNWINDER_MODES` entry that serves sampling ``mode``."""
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}")
+    return "wall" if mode == "async" else mode
 
 
 @dataclass(frozen=True, slots=True)
 class RawSample:
-    """One read of the target's stacks as ``_remote_debugging`` returned it.
+    """One read of the target as ``_remote_debugging`` returned it.
 
     ``data`` is opaque to the rest of sgrud. It is what the standard
     library's ``profiling.sampling`` collectors consume, so a sample can be
     handed to them unchanged, see :mod:`sgrud.export`. :meth:`stacks` and
-    :meth:`tasks` convert it to sgrud's own types.
+    :meth:`tasks` convert it to sgrud's own types, depending on ``mode``.
     """
 
+    #: One of :data:`MODES`.
     mode: str
     data: Any
 
@@ -266,10 +285,10 @@ def _no_asyncio(exc: BaseException) -> bool:
 class RemoteInspector:
     """Reads stacks, asyncio tasks and GC stats from another process.
 
-    ``mode`` is one of :data:`UNWINDER_MODES`. Only ``wall`` and ``async``
-    return every thread, the others are for sampling. ``opcodes`` makes
-    each raw frame carry the bytecode instruction being executed, which
-    only the ``profiling.sampling`` collectors use.
+    ``mode`` is one of :data:`UNWINDER_MODES`. Only a ``wall`` inspector
+    returns every thread, and it is the one that can read the task graph.
+    ``opcodes`` makes each raw frame carry the bytecode instruction being
+    executed, which only the ``profiling.sampling`` collectors use.
     """
 
     def __init__(
@@ -291,7 +310,7 @@ class RemoteInspector:
                 pid,
                 all_threads=True,
                 mode=UNWINDER_MODES[mode],
-                skip_non_matching_threads=mode not in ("wall", "async"),
+                skip_non_matching_threads=mode != "wall",
                 native=native,
                 gc=gc_markers,
                 opcodes=opcodes,
@@ -313,8 +332,8 @@ class RemoteInspector:
             return ProcessExited(self.pid)
         return exc
 
-    def sample(self, retries: int = 5) -> RawSample:
-        """One read in this inspector's mode, unconverted.
+    def sample(self, retries: int = 5, *, tasks: bool = False) -> RawSample:
+        """One read of the stacks in this inspector's mode, or of the task graph.
 
         The target keeps running while its frames are read, so a thread
         that is pushing or popping a frame at that instant makes the read
@@ -322,46 +341,28 @@ class RemoteInspector:
         whose threads call functions in a tight loop that is every other
         read. A failed read is retried at once up to ``retries`` times,
         which costs a few microseconds each and gets almost all of them.
+        ``python -m asyncio ps`` retries its task reads the same way.
+
+        With ``tasks`` the read is ``get_all_awaited_by`` and the sample
+        is an ``async`` one. A target that never imported asyncio yields
+        an empty sample rather than an error.
         """
+        if tasks and self.mode != "wall":
+            raise ValueError("tasks are read through a wall inspector")
         unwinder = self._live()
+        mode = "async" if tasks else self.mode
         for attempt in range(retries + 1):
             try:
-                if self.mode == "async":
+                if tasks:
                     result = unwinder.get_all_awaited_by()
                 else:
                     result = unwinder.get_stack_trace()
-                return RawSample(self.mode, result)
+                return RawSample(mode, result)
             except ProcessLookupError as e:
                 raise ProcessExited(self.pid) from e
             except Exception as e:
-                if self.mode == "async" and _no_asyncio(e):
-                    return RawSample(self.mode, ())
-                if attempt == retries:
-                    raise self._guard(e) from e
-        raise AssertionError("unreachable")
-
-    def stacks(self) -> dict[int, tuple[int, ThreadStatus, tuple[Frame, ...]]]:
-        """Map OS thread id to (interpreter_id, status, frames leaf-first)."""
-        if self.mode == "async":
-            raise ValueError("an async inspector reads tasks, not stacks")
-        return self.sample().stacks()
-
-    def tasks(self, retries: int = 5) -> tuple[Task, ...]:
-        """All asyncio tasks in the target, across threads.
-
-        Like ``asyncio ps`` this retries a few times before giving up on a
-        torn read. Works in any mode.
-        """
-        unwinder = self._live()
-        for attempt in range(retries + 1):
-            try:
-                return _convert_tasks(unwinder.get_all_awaited_by())
-            except ProcessLookupError as e:
-                raise ProcessExited(self.pid) from e
-            except Exception as e:
-                # asyncio not imported in the target is a normal condition.
-                if _no_asyncio(e):
-                    return ()
+                if tasks and _no_asyncio(e):
+                    return RawSample(mode, ())
                 if attempt == retries:
                     raise self._guard(e) from e
         raise AssertionError("unreachable")
@@ -404,16 +405,6 @@ class RemoteInspector:
             if item.collections > 0
         )
 
-    def gc(self) -> tuple[GCGeneration, ...]:
-        """Per-generation GC totals plus the recent collection history."""
-        return build_gc(self.gc_records(), now_ns=time.perf_counter_ns())
-
-    def pause(self) -> None:
-        self._live().pause_threads()
-
-    def resume(self) -> None:
-        self._live().resume_threads()
-
     def _live(self):
         if self._unwinder is None:
             raise RuntimeError("inspector is closed")
@@ -452,15 +443,16 @@ def build_gc(
     records: Iterable[GCRecord],
     *,
     now_ns: int | None = None,
-    limit: int | None = None,
     rates: Mapping[int, tuple[float | None, float | None]] | None = None,
 ) -> tuple[GCGeneration, ...]:
     """Turn ring records into per-generation totals and a history of deltas.
 
-    Records may span several reads of the ring. Each collection's own
-    figures are the difference to the record before it, so a gap (the ring
-    wrapped between reads) leaves that collection's figures unknown. The
-    first collection of a generation needs no predecessor.
+    Records may span several reads of the ring, see
+    :class:`sgrud.monitor._GCTracker`, and every record given ends up in
+    the history. Each collection's own figures are the difference to the
+    record before it, so a gap (the ring wrapped between reads) leaves
+    that collection's figures unknown. The first collection of a
+    generation needs no predecessor.
 
     ``now_ns`` is a ``time.perf_counter_ns()`` reading used to fill in each
     collection's ``age``. ``rates`` maps generation to ``(rate, time_share)``.
@@ -476,8 +468,6 @@ def build_gc(
             continue
         history: list[GCCollection] = []
         for index in sorted(slots, reverse=True):
-            if limit is not None and len(history) >= limit:
-                break
             cur = slots[index]
             base: GCRecord | _ZeroStats | None
             if index == 1:

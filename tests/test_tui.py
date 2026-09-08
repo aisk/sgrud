@@ -200,7 +200,7 @@ async def test_tui_hotspots_tab(monitor, tmp_path):
         await pilot.pause()
         assert app.hotspots.samples < before / 2
         await pilot.press("m")
-        assert app.hotspots.mode == "gil"
+        assert app.sample_mode == "gil" and app.sampler.mode == "gil"
         await pilot.press("q")
     assert not app.sampler.running
     # The recording survives the mode switch and is closed on exit.
