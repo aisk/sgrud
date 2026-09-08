@@ -105,7 +105,8 @@ def test_sampler_gil_mode_ignores_sleepers(monitor):
         time.sleep(0.5)
     rows = {r.funcname: r for r in sampler.hotspots.rows()}
     assert "busy_loop" in rows
-    assert "idle_loop" not in rows
+    # The sleeper takes the GIL for an instant every 200ms, so a stray sample is fine.
+    assert "idle_loop" not in rows or rows["idle_loop"].total_percent < 5, rows["idle_loop"]
     assert rows["busy_loop"].self_percent > 80
 
 
