@@ -175,7 +175,11 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
         print(task.name, task.parent_ids, [f.funcname for f in task.frames])
     print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
     print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
-    print(snap.process.cgroup.memory_limit, snap.process.cgroup.cpu_quota, snap.process.cgroup.oom_kills)
+    print(
+        snap.process.cgroup.memory_limit,
+        snap.process.cgroup.cpu_quota,
+        snap.process.cgroup.oom_kills,
+    )
     print([(c.pid, c.python, c.rss) for c in snap.children])
     print(snap.ipc.num_fds, snap.ipc.locks, [(f.fd, f.kind, f.target) for f in snap.ipc.files])
     print([(t.name, t.syscall.describe()) for t in snap.threads if t.syscall])
