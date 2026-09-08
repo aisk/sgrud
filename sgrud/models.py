@@ -203,7 +203,7 @@ class Memory:
     """Process memory figures in bytes.
 
     Fields the platform does not report are 0. Linux reports everything.
-    macOS has ``rss``, ``vms`` and ``uss``. Windows has those plus ``hwm``
+    macOS has ``rss``, ``vms`` and ``uss``. Windows has those plus ``peak_rss``
     and ``data`` (private bytes), and its ``vms`` is the commit charge,
     which can be smaller than ``rss``.
     """
@@ -211,7 +211,7 @@ class Memory:
     rss: int
     vms: int
     #: Peak RSS.
-    hwm: int
+    peak_rss: int
     swap: int
     data: int
     shared: int

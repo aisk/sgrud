@@ -189,8 +189,7 @@ with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
 For profiling, `Sampler` calls `Monitor.sample(mode)` in a background thread and feeds a `Hotspots` aggregator. A `Recorder` writes the samples in any of the [output formats](#output-formats):
 
 ```python
-from sgrud.sampler import Sampler
-from sgrud.export import Recorder
+from sgrud import Recorder, Sampler
 
 flame = Recorder("profile.html", interval=1 / 500)
 with Sampler(monitor, rate=500, mode="gil", recorders=[flame]) as sampler:

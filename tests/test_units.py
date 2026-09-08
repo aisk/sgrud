@@ -42,7 +42,7 @@ def _process(**overrides):
         cmdline=("python",),
         state="sleeping",
         num_threads=1,
-        memory=Memory(rss=1 << 20, vms=0, hwm=0, swap=0, data=0, shared=0),
+        memory=Memory(rss=1 << 20, vms=0, peak_rss=0, swap=0, data=0, shared=0),
         user_time=0,
         system_time=0,
         uptime=0,
@@ -212,7 +212,14 @@ def test_memory_rows_skip_what_the_platform_lacks():
 
     rich = _process(
         memory=Memory(
-            rss=1 << 20, vms=2 << 20, hwm=3 << 20, swap=0, data=0, shared=0, uss=512 << 10, brk=4096
+            rss=1 << 20,
+            vms=2 << 20,
+            peak_rss=3 << 20,
+            swap=0,
+            data=0,
+            shared=0,
+            uss=512 << 10,
+            brk=4096,
         ),
         fault_rate=12.0,
         limits=MemoryLimits(address_space=4 << 30, oom_score=5),

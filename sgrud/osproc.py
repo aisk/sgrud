@@ -198,7 +198,7 @@ class ProcessStats:
             memory = Memory(
                 rss=mem.rss,
                 vms=mem.vms,
-                hwm=mem.peak_wset,
+                peak_rss=mem.peak_wset,
                 swap=0,
                 data=mem.private,
                 shared=0,
@@ -207,7 +207,13 @@ class ProcessStats:
             faults, major, limits = mem.num_page_faults, 0, MemoryLimits()
         else:
             memory = Memory(
-                rss=mem.rss, vms=mem.vms, hwm=0, swap=0, data=0, shared=0, uss=self._uss_cached()
+                rss=mem.rss,
+                vms=mem.vms,
+                peak_rss=0,
+                swap=0,
+                data=0,
+                shared=0,
+                uss=self._uss_cached(),
             )
             faults, major, limits = mem.pfaults, mem.pageins, MemoryLimits()
         return ProcessStat(
@@ -438,7 +444,7 @@ def _linux_memory(pid: int, mem: Any, status_text: str) -> tuple[Memory, int, in
     memory = Memory(
         rss=mem.rss,
         vms=mem.vms,
-        hwm=status["VmHWM"],
+        peak_rss=status["VmHWM"],
         swap=status["VmSwap"],
         data=mem.data,
         shared=mem.shared,

@@ -129,7 +129,7 @@ def memory_rows(p: Process) -> list[tuple[str, list[tuple[str, str]]]]:
         group(
             "rss",
             ("", m.rss),
-            ("peak", m.hwm),
+            ("peak", m.peak_rss),
             ("anon", m.anon),
             ("file", m.file),
             ("shmem", m.shmem),

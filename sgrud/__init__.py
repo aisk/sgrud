@@ -12,6 +12,7 @@ Quick start::
 """
 
 from .errors import AttachError, NotSupported, ProcessExited, SgrudError
+from .export import Recorder
 from .models import (
     IPC,
     Awaiter,
@@ -33,6 +34,8 @@ from .models import (
     ThreadStatus,
 )
 from .monitor import Monitor
+from .profile import Hotspots
+from .sampler import Sampler
 
 __all__ = [
     "AttachError",
@@ -43,6 +46,7 @@ __all__ = [
     "Frame",
     "GCCollection",
     "GCGeneration",
+    "Hotspots",
     "IPC",
     "Memory",
     "MemoryLimits",
@@ -51,6 +55,8 @@ __all__ = [
     "OpenFile",
     "Process",
     "ProcessExited",
+    "Recorder",
+    "Sampler",
     "SgrudError",
     "SharedMapping",
     "Snapshot",

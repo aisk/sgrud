@@ -75,7 +75,7 @@ def _fake_snapshot(threads, pid=42):
         cmdline=("python",),
         state="sleeping",
         num_threads=len(threads),
-        memory=Memory(rss=0, vms=0, hwm=0, swap=0, data=0, shared=0),
+        memory=Memory(rss=0, vms=0, peak_rss=0, swap=0, data=0, shared=0),
         user_time=0,
         system_time=0,
         uptime=1,
