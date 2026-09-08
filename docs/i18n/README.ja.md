@@ -2,25 +2,35 @@
 
 [English](../../README.md) | [简体中文](README.zh-CN.md) | **日本語** | [한국어](README.ko.md) | [Tiếng Việt](README.vi.md) | [Français](README.fr.md) | [Deutsch](README.de.md)
 
-sgrud (スコットランド・ゲール語の *sgrùd* に由来し、「検査」や「調査」を意味します)
-は、実行中の Python プロセスを調べるための診断ツールです。CPython プロセスに
-アタッチして、そのメモリ、CPU、スレッド、asyncio タスク、スタック、ガベージ
-コレクタを、対象を遅くすることなく観察できます。
+sgrud (スコットランド・ゲール語の *sgrùd* に由来し、「検査」や「調査」を意味します) は、実行中の Python プロセスを調べるための診断ツールです。CPython プロセスにアタッチして、そのメモリ、CPU、スレッド、asyncio タスク、スタック、ガベージコレクタを、対象を遅くすることなく観察できます。
 
-sgrud は対象を停止させることも、計装することもありません。CPython 3.15 の
-`_remote_debugging` モジュール (Tachyon プロファイラや `python -m asyncio ps`
-を支える仕組み) を通じてインタープリタの状態をプロセスメモリから直接読み取り、
-メモリと CPU の計測には OS が報告する情報を組み合わせます。全スレッドの
-スタックのスナップショットは数十マイクロ秒で取得でき、対象側のコストはゼロです。
-
-CPython 3.15 以降が必要で、Linux、macOS、Windows で動作します。対象は sgrud
-自身と同じ major.minor バージョンで動作している必要があります。Linux では
-すべての情報が得られます。他のプラットフォームとの違いは
-[プラットフォーム](#プラットフォーム) を参照してください。
+sgrud は対象を停止させることも、計装することもありません。CPython 3.15 の `_remote_debugging` モジュール (Tachyon プロファイラや `python -m asyncio ps` を支える仕組み) を通じてインタープリタの状態をプロセスメモリから直接読み取り、メモリ、CPU、スレッド、開いているファイルについては psutil を通じて OS が報告する情報を組み合わせます。全スレッドのスタックのスナップショットは数十マイクロ秒で取得でき、対象側のコストはゼロです。
 
 ![Threads タブ。各スレッドの状態、CPU 使用率、現在の Python スタックを表示](https://github.com/user-attachments/assets/5a6bf1a3-fddb-48fe-9aa6-18c76f751ef7)
 
 *Threads タブ：各スレッドの状態、CPU 占有率、ライブの Python スタック。*
+
+## 機能
+
+- **Process**: プラットフォームが許す限り分解したメモリ、CPU、ページフォルト、上限、cgroup のクォータとスロットル、そして子プロセスの一覧 (Python インタープリタであるものには印が付きます)。
+- **Threads**: すべてのスレッドの状態、CPU 占有率、ライブの Python スタック、Linux ではブロックしているシステムコール。
+- **Tasks**: asyncio のタスクツリー。各タスクが停止しているコルーチンフレーム付き。
+- **GC**: 回収に費やした時間、回収レート、追跡中のオブジェクト数、回収の履歴、そして回収のきっかけになった関数。
+- **Hotspots** と **Flame**: wall、GIL、CPU、exception、asyncio タスクの各モードを持つバックグラウンドサンプリングプロファイラ。表またはフレームグラフで表示します。
+- **IPC**: 開いているディスクリプタ、パイプとその反対側の端を持つプロセス、ソケット、共有メモリ、ファイルロック。ハングしたプロセスのために。
+- `sgrud dump` は同じ内容をテキストか JSON で出力し、`sgrud profile` は一定時間サンプリングして Tachyon の任意の形式で書き出し、`sgrud probe` はメモリだけでは分からない情報を対象に問い合わせます。`--web` は同じ画面をブラウザに表示します。
+- 単純な dataclass を返す `Monitor` クラス。すべての機能をライブラリとしても利用できます。
+
+## インストール
+
+```
+pip install sgrud
+pip install "sgrud[web]"    # --web を追加
+```
+
+`uv tool install sgrud` と `pipx install sgrud` でも構いません。sgrud には Linux、macOS、Windows 上の CPython 3.15 以降が必要で、対象は sgrud 自身と同じ major.minor バージョンで動作している必要があります。
+
+メモリ、CPU、スレッド名は自分が所有する任意のプロセスで動作します。インタープリタの状態を読み取るには、Linux では ptrace の権限、macOS では root、Windows では同じユーザーが必要です。権限がない場合、sgrud は制限モードでアタッチし、何が不足しているかを表示します。すべての機能を使う最も簡単な方法は対象を sgrud から起動することです。他の方法は [Permissions](../reference.md#permissions) を参照してください。
 
 ## 使い方
 
@@ -29,233 +39,27 @@ sgrud PID                           対話的なターミナルインターフ�
 sgrud run -- python app.py          対象を子プロセスとして起動して調べる
 sgrud PID --web                     同じ画面をブラウザで表示する
 
-sgrud dump PID                      テキストのスナップショットを 1 回出力
-sgrud dump PID -n 0.5               対象が終了するまで 0.5 秒ごとに出力し続ける
-sgrud dump PID --json               1 行につき 1 つの JSON オブジェクト
-sgrud dump run -- python app.py     `run -- CMD` はどこでも pid の代わりに使える
-
-sgrud profile PID                   5 秒間スタックをサンプリングし、最もホットな関数を表示
-sgrud profile PID -d 30 --mode gil  30 秒間サンプリングし、GIL を保持するスレッドだけを数える
-sgrud profile PID --mode async      スレッドの代わりに asyncio タスクをサンプリング
-sgrud profile PID --folded          flamegraph.pl や speedscope 向けの折りたたみスタック
-sgrud profile PID -o out.html       フレームグラフを書き出す (.json / .pstats / .txt / .jsonl / ディレクトリも可)
-sgrud profile PID -o out.bin        `python -m profiling.sampling replay` 用に記録
-sgrud PID --record out.bin          インターフェースを開きつつ全サンプルを記録
-
+sgrud dump PID                      テキストのスナップショットを 1 回出力、--json で JSON
+sgrud profile PID -d 30 --mode gil  30 秒間 GIL を保持するスレッドをサンプリングし、最もホットな関数を表示
+sgrud profile PID -o out.html       代わりにフレームグラフを書き出す
 sgrud probe PID                     対象内でスクリプトを実行: gc の閾値、アロケータ、スレッド
-sgrud probe PID -t 10               追跡中オブジェクトを型ごとに数え、上位 10 種を表示
 ```
 
-`--no-stacks`、`--no-tasks`、`--no-gc`、`--no-children`、`--no-ipc` を指定すると、
-不要なセクションをインターフェースやダンプから省けます。
+`examples/demo_app.py` はどのタブにも何かを表示させる対象プログラムです。起動して、表示された pid に sgrud を向けてください。
 
-`examples/demo_app.py` はどのタブにも何かを表示させる対象プログラムです。ビジーなスレッドとブロックされたスレッド、asyncio のタスクツリー、`multiprocessing` のワーカー、パイプ、ソケット、共有メモリ、子プロセスが保持するファイルロックを動かします。起動して、表示された pid に sgrud を向けてください。
-
-### サンプリングモード
-
-- **wall**: Python スタックを持つすべてのスレッドを数えるため、スリープ中の
-  スレッドも忙しいスレッドと同じ重みになります。
-- **gil**: GIL を保持しているスレッドだけを数えます。「CPU はどこで使われて
-  いるのか」に答えるモードです。
-- **cpu**: OS がコア上で実行中のスレッドだけを数えます。GIL を手放した C
-  コードも数えられ、GIL 待ちのスレッドは数えられません。
-- **exception**: 例外を処理中のスレッドだけを数えます。例外がどこで送出され、
-  捕捉されるまでどこまで伝播するかが分かります。
-- **async**: スレッドスタックの代わりに asyncio タスクをサンプリングします。
-  `await` で待機中のコルーチンはどのスレッドのスタックにも存在しないためです。
-  各リーフタスクが 1 つのスタックになります。自身のフレーム、`<task NAME>`
-  マーカー、そしてルートまでそのタスクを await している各タスクのフレームが
-  続きます。実行中か中断中かにかかわらずすべてのタスクを数えるため、「タスクは
-  何を待っているのか」に答えるモードです。スタックの読み取りより 1 サンプル
-  あたりの処理が遅いため、実際のレートは低くなります。
-
-### 出力形式
-
-`profile -o PATH` は表を表示する代わりに、標準ライブラリの `profiling.sampling`
-(Tachyon プロファイラ) の形式でサンプルを書き出します。拡張子で形式が決まります。
-`.html` はフレームグラフ、`.json` は Firefox Profiler 文書、`.pstats` は
-`pstats.Stats` で読み込め、`.txt` は折りたたみスタック、`.jsonl` は 1 行 1
-サンプル、ディレクトリを指定するとソースのヒートマップになります。`.bin` は
-Tachyon のバイナリ形式で、後から `python -m profiling.sampling replay` で他の
-どの形式にも変換できます。`--baseline old.bin` を付けると以前の記録との差分
-フレームグラフになり、`--opcodes` は対応する形式向けに各フレームのバイトコード
-命令を記録します。`sgrud PID --record out.bin` はインターフェースの裏で同じ
-記録を行い、モードを切り替えても続きます。
-
-### TUI
-
-| キー | 動作 |
-| --- | --- |
-| `1`-`7`、`tab`、`shift+tab` | タブの切り替え |
-| `p` / `r` | 一時停止 / 更新 |
-| `+` / `-` | 更新間隔の変更 |
-| `q` | 終了 |
-| `f` | スレッドフィルタ (Hotspots と Flame) |
-| `m` | サンプリングモードの切り替え (Hotspots と Flame) |
-| `x` | 対象をプローブ (GC) |
-| `c` | サンプルのクリア (Hotspots と Flame) |
-| `s` | self/total の並び順の切り替え (Hotspots) |
-| `enter` / `backspace` / `esc` | ズームイン / ズームアウト / リセット (Flame) |
-
-矢印キーは現在のタブの内容をすぐに移動します。Hotspots と Flame は 1 つの
-バックグラウンドサンプラー (`--rate`、デフォルト 100 Hz) を共有しており、
-他のタブを見ている間も動作し続けます。フレームグラフは下から上に伸び、最初の
-行で各スレッドに独自のブロックを割り当てるため、アイドル状態のスレッドは他の
-スレッドに混ざることなく、高い柱として表示されます。
-
-GC タブには、回収に費やした時間の割合、毎秒の回収回数、追跡中のオブジェクト数、
-回収の履歴が表示されます。対象プロセス自身は直近の若い世代 11 回と古い世代 3 回しか保持しないため、
-monitor が見たレコードをすべて蓄積します。サンプラーが動いている間は、回収のきっかけになった関数、
-つまり割り当てが集中している場所も表示します。Process タブはプラットフォームが許す限りメモリを分解して表示します。
-[プラットフォーム](#プラットフォーム)を参照してください。さらに対象の子プロセスを CPU とメモリ付きで一覧し、
-Python インタプリタであるものに印を付けるので、`multiprocessing` のプールやスーパーバイザが起動した
-ワーカーが一目で分かります。どれでも別の `sgrud PID` で検査できます。
-Linux ではこのタブに対象が属する cgroup、たとえばコンテナの cgroup も表示されます。
-CPU クォータとスロットルされた期間の割合、OOM kill の回数、pid 上限（スレッドも数えられます）に加え、
-プロセスが動ける CPU 数が並びます。cgroup の数値はすべて cgroup 全体のもので、対象プロセスだけのものではありません。
-
-IPC タブはハングしたプロセスのためのものです。対象が開いているすべての
-ディスクリプタ、つまりパイプ、アドレスと状態付きのソケット、共有メモリ、
-ファイルを列挙し、各パイプについて対象の親と子のどれが反対側の端を
-持っているかを示します。表の上には上限に対するディスクリプタ数、マップされた
-共有メモリセグメントと `multiprocessing` のセマフォ、対象が保持している
-ファイルロック、そして赤字で、待たされているロックとそれを持つ pid が
-並びます。Linux では Threads タブに、眠っているスレッドが止まっている
-システムコールとそのディスクリプタ、たとえば `read(fd 4)` が加わり、IPC の
-表でもそのディスクリプタの横にスレッド名が出ます。表示されるのはカーネルが
-報告する事実だけです。`futex` 待ちはロックか GIL かのどちらかで、隣の
-Python スタックがどちらかを教えてくれます。
-
-![Tasks タブ。asyncio タスクのツリーと各タスクが待機している対象を表示](https://github.com/user-attachments/assets/e8f1e9b0-2d8c-4b39-b67a-b9ba3ae2fa1d)
-
-*Tasks タブ：asyncio タスクのツリー。各タスクが停止しているコルーチンフレーム付き。*
-
-![Hotspots タブ。CPU サンプルが最も多い関数を一覧表示](https://github.com/user-attachments/assets/32c75ac9-e279-41e8-83a2-b7e2970275e4)
-
-*Hotspots タブ：バックグラウンドサンプラーの self / total サンプル数で並べた関数。*
-
-![Flame タブ。サンプリングしたスタックのフレームグラフを表示](https://github.com/user-attachments/assets/b78cfbec-3619-45a6-a2a9-5bc57f2e45f3)
-
-*Flame タブ：同じサンプルをフレームグラフとして表示。最初の行はスレッドごとに 1 ブロック。*
-
-### Web
-
-`--web` を付けると、同じ画面を [textual-serve](https://github.com/Textualize/textual-serve)
-経由でブラウザに表示します。これはオプション依存なので `sgrud[web]` をインストール
-してください。既定では `http://127.0.0.1:8000` で待ち受け、`--host` と `--port`
-で変更できます。ブラウザのタブごとに独立した画面が同じ対象プロセスに接続します。
-認証はないので、localhost に限定するか、認証を提供するものの背後に置いてください。
-Linux で `run -- CMD` を使うと、ブラウザセッションは対象の親ではないため、
-対象は同じユーザーの任意のプロセスから読めるように起動されます。
-
-### プローブ
-
-ここまでの機能はすべて外側から対象のメモリを読むだけです。`sgrud probe` は
-唯一の例外で、`sys.remote_exec` を使って対象のメインスレッドに次の安全点で短い
-スクリプトを実行させ、インタプリタがメモリ上に公開していない情報を報告させます。
-gc の閾値とそれと比較されるカウンタ、コレクタが有効かどうか、凍結された
-オブジェクトや `gc.garbage` にあるオブジェクトの数、アロケータが保持する
-ブロック数、モジュール数とスレッド数、`-t N` を付ければ追跡中オブジェクトの
-型ごとのヒストグラム、対象が既に tracemalloc を有効にしていればそのスナップ
-ショットも含まれます。GC タブの `x` も同じプローブを実行します。対象の
-メインスレッドを数ミリ秒 (型ヒストグラム付きならもっと) 使い、メインスレッドが
-安全点に到達するのを待つため、C コードで止まっているとタイムアウトします。
-sgrud が勝手に実行することはありません。
-
-## ライブラリ
-
-TUI はフロントエンドにすぎません。すべては `Monitor` から得られ、
-単純な frozen dataclass を返します。
+Python から:
 
 ```python
 from sgrud import Monitor
 
 with Monitor.attach(pid) as m:  # or Monitor.spawn(["python", "app.py"])
-    snap = m.snapshot()  # snapshot(stacks=..., tasks=..., gc=...)
+    snap = m.snapshot()
     print(snap.process.memory.rss, snap.process.cpu_percent)
     for t in snap.threads:
-        print(t.tid, t.name, t.status.describe(), t.cpu_percent, t.frames[:1])
-    for task in snap.tasks:
-        print(task.name, task.parent_ids, [f.funcname for f in task.frames])
-    print(snap.gc[0].rate, snap.gc_time_share, snap.gc[0].history[:1])
-    print(snap.process.memory.anon, snap.process.fault_rate, snap.process.limits)
-    print(snap.process.cgroup.cpu_quota, snap.process.cgroup.throttled_percent, snap.process.cgroup.oom_kills)
-    print([(c.pid, c.python, c.rss) for c in snap.children])
-    print(snap.to_dict())  # JSON friendly
-    result = m.probe(types=5)  # runs code in the target, see Probing
-    print(result.gc_threshold, result.gc_count, result.types)
+        print(t.tid, t.name, t.status.describe(), t.frames[:1])
 ```
 
-`Monitor.stream(interval)` は対象が終了するまでスナップショットを yield し、
-その後 `ProcessExited` を送出します。CPU 使用率の計算には 2 つの
-スナップショットが必要なため、最初のスナップショットでは `None` になります。
-
-プロファイリングには `Sampler` を使います。バックグラウンドスレッドで
-`Monitor.sample_stacks()` を実行し、`Hotspots` アグリゲータに結果を渡します。
-
-```python
-from sgrud.sampler import Sampler
-
-from sgrud.export import Recorder
-
-flame = Recorder("profile.html", interval=1 / 500)
-with Sampler(monitor, rate=500, mode="gil", recorders=[flame]) as sampler:
-    time.sleep(5)
-sampler.close()  # writes profile.html
-for row in sampler.hotspots.rows(sort="self", limit=10):
-    print(row.self_percent, row.funcname, row.filename)
-tree = sampler.hotspots.call_tree()  # merged call tree, one child per thread
-print("\n".join(sampler.hotspots.folded()))  # flamegraph.pl input
-```
-
-## プラットフォーム
-
-スタック、asyncio タスク、GC、プロファイラは `_remote_debugging` から取得
-するため、どこでも同じように動作します。プロセスとスレッドの計測は psutil を
-通じて OS から取得しており、プラットフォームごとの違いはここにあります。
-
-- **Linux** はスレッドごとのスケジューラ状態を含むすべてを報告します。
-  wall モードでスレッドが CPU 上にあると判定するのはこれによります。
-  メモリも完全で、rss の匿名部分とファイル部分、USS と PSS、brk ヒープと匿名マッピング、
-  透過的ヒュージページ、ページフォルト率、cgroup のメモリ上限、OOM スコアが得られます。
-  cgroup v2 なら cgroup の CPU クォータ、スロットル、OOM kill の回数、pid 上限も得られます。
-  IPC の全体像が得られるのも Linux だけです。パイプとその反対側、共有メモリ、
-  ファイルロック、各スレッドがブロックしているシステムコール（メモリの読み取りと
-  同じ権限が必要で、sgrud が持つ呼び出し番号表は x86_64、aarch64、riscv64、
-  loongarch64 のみ。他では番号で表示されます）。
-- **Windows** にはスレッド名とスレッドごとの CPU 時間がありますが、
-  スケジューラ状態がないため、wall モードではスレッドが `cpu` / `idle` ではなく `?` と表示されます。
-  メモリは `rss`、`vms`、ワーキングセットのピーク、プライベートバイト、
-  USS、ページフォルト率です。IPC はハンドル数、開いているファイルとソケットで、
-  ディスクリプタ番号はありません。
-- **macOS** では OS のスレッドをインタープリタのスレッド ID と対応付けられないため、
-  スレッドに名前も CPU の数値も付きません。メモリは `rss`、`vms`、
-  USS、ページフォルト率です。IPC はディスクリプタ数、開いているファイルとソケットです。
-  他プロセスのメモリを読むには root が必要なので、
-  sgrud を `sudo` で実行してください。
-
-## 権限
-
-メモリ、CPU、スレッド名は OS から取得するため、自分が所有する任意の
-プロセスで動作します。それ以外はすべて対象のメモリを読み取ります。Linux では
-ptrace の権限が必要ですが、デフォルトの `kernel.yama.ptrace_scope=1` では
-子プロセスに対してしか許可されません。権限がない場合、sgrud は制限モードでアタッチし、
-何が不足しているかを説明するバナーを表示します。すべての機能を使うには、
-対象を `sgrud run -- ...` で起動する、sgrud を `sudo` で実行する、
-`CAP_SYS_PTRACE` を付与する、またはセッション中だけ Yama を緩和してください。
-
-```
-echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
-```
-
-macOS では root だけが他のプロセスのメモリを読めるため、`sudo` を使って
-ください。Windows では同じユーザーのプロセスならそのまま動作し、他のユーザーの
-プロセスには管理者権限が必要です。
-
-`Monitor.attach` に `require_full=True` を渡すと、機能を落とす代わりに
-失敗するようになります。`-X disable-remote-debug` で起動した対象も調べられます。
-このフラグはコードインジェクションを無効にするだけだからです。唯一止められるのは
-`sgrud probe` です。
+[リファレンス](../reference.md) では、すべてのコマンドとオプション、サンプリングモードと出力形式、TUI のキーとタブ、ライブラリ、各プラットフォームが報告する内容、権限の取得方法を説明しています。
 
 ## 開発
 
@@ -264,5 +68,4 @@ uv sync
 uv run pytest
 ```
 
-テストは `tests/target_app.py` を起動して調べるため、実際のアタッチ経路を
-検証します。Textual アプリはその pilot を通じてヘッドレスでテストされます。
+テストは `tests/target_app.py` を起動して調べるため、実際のアタッチ経路を検証します。Textual アプリはその pilot を通じてヘッドレスでテストされます。
