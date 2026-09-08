@@ -5,10 +5,11 @@ import sys
 import time
 
 import pytest
-from conftest import HAS_THREAD_STATS, TARGET, spawn_sleeper, spawn_target
+from conftest import TARGET, spawn_sleeper, spawn_target
 
 from sgrud import AttachError, Monitor, ProcessExited, SgrudError, ThreadStatus
 from sgrud.format import format_snapshot
+from sgrud.osproc import HAS_THREAD_STATS
 
 
 def test_process_section(snapshot, monitor):

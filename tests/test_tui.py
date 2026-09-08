@@ -2,10 +2,10 @@ import asyncio
 from typing import cast
 
 import pytest
-from conftest import HAS_THREAD_STATS
 from textual.widgets import DataTable, Select, Static, TabbedContent, Tabs, Tree
 
 from sgrud import Monitor
+from sgrud.osproc import HAS_THREAD_STATS
 from sgrud.tui import SgrudApp, StackPanel, Summary
 
 pytestmark = pytest.mark.asyncio
@@ -70,10 +70,29 @@ def _fake_snapshot(threads, pid=42):
     from sgrud.models import Frame, Memory, Process, Snapshot, Thread, ThreadStatus
 
     proc = Process(
-        pid, "python", ("python",), "S", len(threads), Memory(0, 0, 0, 0, 0, 0), 0, 0, 1, 1.0
+        pid=pid,
+        exe="python",
+        cmdline=("python",),
+        state="sleeping",
+        num_threads=len(threads),
+        memory=Memory(rss=0, vms=0, hwm=0, swap=0, data=0, shared=0),
+        user_time=0,
+        system_time=0,
+        uptime=1,
+        cpu_percent=1.0,
     )
     ts = tuple(
-        Thread(tid, name, 0, ThreadStatus.NONE, "S", 0, 0, 0.0, (Frame(f"fn_{name}", "a.py", 1),))
+        Thread(
+            tid=tid,
+            name=name,
+            interpreter_id=0,
+            status=ThreadStatus.NONE,
+            state="sleeping",
+            user_time=0,
+            system_time=0,
+            cpu_percent=0.0,
+            frames=(Frame(f"fn_{name}", "a.py", 1),),
+        )
         for tid, name in threads
     )
     return Snapshot(timestamp=0, process=proc, threads=ts)

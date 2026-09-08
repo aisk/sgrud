@@ -37,13 +37,9 @@ GC_HISTORY = 200
 
 
 @dataclass(slots=True)
-class _CpuSample:
-    wall: float
-    cpu: float
-
-
-@dataclass(slots=True)
 class _RateSample:
+    """Cumulative counters read at wall time ``wall``, for differencing."""
+
     wall: float
     values: tuple[float, ...]
 
@@ -56,6 +52,15 @@ def _rates(
         return (None,) * len(values)
     elapsed = now - prev.wall
     return tuple(max(0.0, (v - p) / elapsed) for v, p in zip(values, prev.values, strict=True))
+
+
+def _cpu_percent(
+    prev: _RateSample | None, now: float, cpu_seconds: float
+) -> tuple[float | None, _RateSample]:
+    """CPU use since ``prev`` in percent of one core, and the sample to keep for next time."""
+    sample = _RateSample(now, (cpu_seconds,))
+    (rate,) = _rates(prev, now, sample.values)
+    return (None if rate is None else rate * 100.0), sample
 
 
 def _share(prev: _RateSample | None, values: tuple[float, ...]) -> float | None:
@@ -165,9 +170,9 @@ class Monitor:
         self._inspector_opts = dict(
             native=native_frames, gc_markers=gc_markers, cache_frames=cache_frames, opcodes=opcodes
         )
-        self._proc_cpu: _CpuSample | None = None
-        self._thread_cpu: dict[int, _CpuSample] = {}
-        self._child_cpu: dict[int, _CpuSample] = {}
+        self._proc_cpu: _RateSample | None = None
+        self._thread_cpu: dict[int, _RateSample] = {}
+        self._child_cpu: dict[int, _RateSample] = {}
         # Whether a child is a CPython process. A fresh interpreter says no
         # until it has mapped its runtime, so only a yes is final.
         self._child_python: dict[int, bool] = {}
@@ -355,25 +360,6 @@ class Monitor:
 
     # -- sampling ------------------------------------------------------
 
-    def _cpu_percent(
-        self,
-        key: int | None,
-        now: float,
-        cpu_seconds: float,
-        store: dict[int, _CpuSample] | None = None,
-    ) -> float | None:
-        if store is None:
-            store = self._thread_cpu
-        prev = self._proc_cpu if key is None else store.get(key)
-        sample = _CpuSample(now, cpu_seconds)
-        if key is None:
-            self._proc_cpu = sample
-        else:
-            store[key] = sample
-        if prev is None or now <= prev.wall:
-            return None
-        return max(0.0, (cpu_seconds - prev.cpu) / (now - prev.wall) * 100.0)
-
     def snapshot(
         self,
         *,
@@ -399,6 +385,7 @@ class Monitor:
         throttle = _RateSample(now, (float(stat.cgroup.periods), float(stat.cgroup.throttled)))
         cgroup = replace(stat.cgroup, throttled_percent=_share(self._throttle, throttle.values))
         self._throttle = throttle
+        cpu_percent, self._proc_cpu = _cpu_percent(self._proc_cpu, now, stat.utime + stat.stime)
         process = Process(
             pid=self.pid,
             exe=stat.exe,
@@ -409,7 +396,7 @@ class Monitor:
             user_time=stat.utime,
             system_time=stat.stime,
             uptime=max(time.time() - self._stats.start_time, 0.0),
-            cpu_percent=self._cpu_percent(None, now, stat.utime + stat.stime),
+            cpu_percent=cpu_percent,
             page_faults=stat.page_faults,
             major_faults=stat.major_faults,
             fault_rate=fault_rate,
@@ -480,7 +467,9 @@ class Monitor:
                     status |= ThreadStatus.ON_CPU
             cpu_percent = None
             if tstat is not None:
-                cpu_percent = self._cpu_percent(tid, now, tstat.utime + tstat.stime)
+                cpu_percent, self._thread_cpu[tid] = _cpu_percent(
+                    self._thread_cpu.get(tid), now, tstat.utime + tstat.stime
+                )
             threads.append(
                 Thread(
                     tid=tid,
@@ -547,6 +536,9 @@ class Monitor:
                     self.limited is not None and osproc.looks_like_python(c.pid)
                 )
                 self._child_python[c.pid] = python
+            cpu_percent, self._child_cpu[c.pid] = _cpu_percent(
+                self._child_cpu.get(c.pid), now, c.utime + c.stime
+            )
             out.append(
                 ChildProcess(
                     pid=c.pid,
@@ -560,7 +552,7 @@ class Monitor:
                     user_time=c.utime,
                     system_time=c.stime,
                     uptime=max(time.time() - c.start_time, 0.0) if c.start_time else 0.0,
-                    cpu_percent=self._cpu_percent(c.pid, now, c.utime + c.stime, self._child_cpu),
+                    cpu_percent=cpu_percent,
                 )
             )
         return tuple(out)

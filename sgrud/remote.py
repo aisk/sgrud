@@ -464,7 +464,18 @@ def build_gc(
     for gen, slots in sorted(by_gen.items()):
         rate, share = (rates or {}).get(gen, (None, None))
         if not slots:
-            gens.append(GCGeneration(gen, 0, 0, 0, 0.0, 0, rate, share))
+            gens.append(
+                GCGeneration(
+                    generation=gen,
+                    collections=0,
+                    collected=0,
+                    uncollectable=0,
+                    total_duration=0.0,
+                    heap_size=0,
+                    rate=rate,
+                    time_share=share,
+                )
+            )
             continue
         history: list[GCCollection] = []
         for index in sorted(slots, reverse=True):

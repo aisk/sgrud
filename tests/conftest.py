@@ -6,7 +6,6 @@ import time
 import pytest
 
 from sgrud import Monitor
-from sgrud.osproc import HAS_THREAD_STATS  # noqa: F401  (re-exported for the tests)
 
 TARGET = pathlib.Path(__file__).with_name("target_app.py")
 

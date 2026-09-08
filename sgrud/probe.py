@@ -17,6 +17,7 @@ asked for explicitly.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import sys
@@ -132,8 +133,6 @@ class ProbeResult:
         return self.tracemalloc_peak > 0 or bool(self.allocations)
 
     def to_dict(self) -> dict[str, Any]:
-        import dataclasses
-
         return dataclasses.asdict(self)
 
 
