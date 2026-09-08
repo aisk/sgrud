@@ -239,38 +239,36 @@ class Memory:
 
 @dataclass(frozen=True, slots=True)
 class MemoryLimits:
-    """Ceilings the process runs under. 0 where there is none or the platform does not say."""
+    """Ceilings the kernel enforces on this process alone, as opposed to
+    its cgroup's, see :class:`Cgroup`. 0 where there is none or the
+    platform does not say. Linux only.
+    """
 
-    #: cgroup memory limit, throttle threshold and current usage, in
-    #: bytes. Linux only, and only when the process is in a cgroup that
-    #: sets them, which is what containers do.
-    cgroup_limit: int = 0
-    cgroup_high: int = 0
-    cgroup_usage: int = 0
-    #: ``RLIMIT_AS``, the address space ceiling. Linux only.
+    #: ``RLIMIT_AS``, the address space ceiling.
     address_space: int = 0
-    #: The kernel's OOM killer score, -1 when unknown. Linux only.
+    #: The kernel's OOM killer score, -1 when unknown.
     oom_score: int = -1
-
-    @property
-    def cgroup_percent(self) -> float | None:
-        if self.cgroup_limit <= 0:
-            return None
-        return 100.0 * self.cgroup_usage / self.cgroup_limit
 
 
 @dataclass(frozen=True, slots=True)
 class Cgroup:
     """The control group the process runs in, as the kernel reports it.
 
-    Linux only, and the CPU, event and pid figures need cgroup v2. Every
-    figure is for the whole cgroup, not just this process. 0 where there
-    is no limit or the kernel does not say.
+    Linux only. The memory figures come from either cgroup version, the
+    CPU, event and pid figures need cgroup v2. Every figure is for the
+    whole cgroup, not just this process. 0 where there is no limit or
+    the kernel does not say.
     """
 
     #: The cgroup's path below the hierarchy root, "" when unknown. "/"
     #: is the root cgroup, which has no limits of its own.
     path: str = ""
+    #: The memory limit, throttle threshold and current usage in bytes,
+    #: from ``memory.max``, ``memory.high`` and ``memory.current``. This
+    #: is the limit a container runs under.
+    memory_limit: int = 0
+    memory_high: int = 0
+    memory_usage: int = 0
     #: The CPU quota from ``cpu.max`` in cores, 0.0 when unlimited.
     cpu_quota: float = 0.0
     #: Counters from ``cpu.stat``: enforcement periods so far, periods in
@@ -293,6 +291,12 @@ class Cgroup:
     #: is the ceiling ``threading.Thread.start`` runs into.
     pids_max: int = 0
     pids_current: int = 0
+
+    @property
+    def memory_percent(self) -> float | None:
+        if self.memory_limit <= 0:
+            return None
+        return 100.0 * self.memory_usage / self.memory_limit
 
 
 @dataclass(frozen=True, slots=True)

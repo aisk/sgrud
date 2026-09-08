@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -163,8 +164,6 @@ class ProcessStats:
         from .ipc import connections, read_ipc
 
         def cached(proc: psutil.Process) -> list[Any]:
-            import time
-
             now = time.monotonic()
             stamp, value = self._connections
             if now - stamp >= CONNECTIONS_INTERVAL:
@@ -190,10 +189,11 @@ class ProcessStats:
             raise ProcessLookupError(self.pid) from e
         cgroup, cpus_allowed = Cgroup(), 0
         if LINUX:
-            memory, faults, major = _linux_memory(self.pid, mem)
-            limits = _linux_limits(self.pid, self._proc, self._cgroup)
+            status = _read(f"/proc/{self.pid}/status")
+            memory, faults, major = _linux_memory(self.pid, mem, status)
+            limits = _linux_limits(self.pid, self._proc)
             cgroup = _linux_cgroup(self._cgroup)
-            cpus_allowed = _linux_cpus_allowed(self.pid)
+            cpus_allowed = _cpus_allowed(status)
         elif WINDOWS:
             memory = Memory(
                 rss=mem.rss,
@@ -227,8 +227,6 @@ class ProcessStats:
 
     def _uss_cached(self) -> int:
         """The unique set size, refreshed at most every :data:`USS_INTERVAL`."""
-        import time
-
         now = time.monotonic()
         stamp, value = self._uss
         if now - stamp >= USS_INTERVAL:
@@ -369,6 +367,33 @@ def ptrace_scope() -> int | None:
         return None
 
 
+def _bounded(value: int) -> int:
+    """``value`` unless it spells "unlimited", which is 0 here.
+
+    Both rlimits and cgroup v1 counters spell it as a number near 2**63,
+    and psutil sometimes as -1.
+    """
+    return 0 if value < 0 or value >= 1 << 62 else value
+
+
+def rlimit(proc: psutil.Process, name: str) -> int:
+    """The soft limit ``name`` (``"RLIMIT_AS"``, say) of ``proc``.
+
+    0 when unlimited, unreadable or on a platform without that limit.
+    Raises ProcessLookupError when the process is gone.
+    """
+    which = getattr(psutil, name, None)
+    if which is None:
+        return 0
+    try:
+        soft, _ = proc.rlimit(which)
+    except psutil.NoSuchProcess as e:
+        raise ProcessLookupError(proc.pid) from e
+    except psutil.Error, OSError:
+        return 0
+    return _bounded(soft)
+
+
 # -- Linux -------------------------------------------------------------
 
 
@@ -390,11 +415,14 @@ def _kib_fields(text: str, wanted: tuple[str, ...]) -> dict[str, int]:
     return out
 
 
-def _linux_memory(pid: int, mem: Any) -> tuple[Memory, int, int]:
-    """(Memory, page faults, major faults) from /proc, on top of psutil's statm figures."""
+def _linux_memory(pid: int, mem: Any, status_text: str) -> tuple[Memory, int, int]:
+    """(Memory, page faults, major faults) from /proc, on top of psutil's statm figures.
+
+    ``status_text`` is the content of ``/proc/<pid>/status``, which the
+    caller reads once for this and :func:`_cpus_allowed`.
+    """
     status = _kib_fields(
-        _read(f"/proc/{pid}/status"),
-        ("VmHWM", "VmSwap", "VmPeak", "RssAnon", "RssFile", "RssShmem"),
+        status_text, ("VmHWM", "VmSwap", "VmPeak", "RssAnon", "RssFile", "RssShmem")
     )
     try:
         rollup = _kib_fields(
@@ -458,8 +486,12 @@ def _linux_faults(stat: str) -> tuple[int, int]:
 
 @dataclass(frozen=True, slots=True)
 class _CgroupFiles:
+    """Where the process's cgroup keeps its files, resolved once per process."""
+
     #: The cgroup's path as ``/proc/<pid>/cgroup`` spells it.
     path: str
+    #: The memory limit, throttle threshold and usage files, "" for a
+    #: file the hierarchy version does not have.
     limit: str
     high: str
     usage: str
@@ -469,11 +501,11 @@ class _CgroupFiles:
 
 
 def _linux_cgroup_files(pid: int) -> _CgroupFiles | None:
-    """Paths of the memory limit files of the process's cgroup, if any.
+    """The files of the process's cgroup, if any.
 
     Handles cgroup v2 (one ``0::/path`` line) and v1 (a line naming the
-    ``memory`` controller). Resolved once per process; a process rarely
-    moves between cgroups. Returns None when the cgroup's directory is
+    ``memory`` controller). A process rarely moves between cgroups, so
+    this is resolved once. Returns None when the cgroup's directory is
     not visible, which is the case for a container watched from outside
     its cgroup namespace. The root cgroup has no limit files, so reading
     them yields 0 like an unlimited cgroup.
@@ -539,21 +571,27 @@ def _pids_max(text: str) -> int:
 
 
 def _linux_cgroup(files: _CgroupFiles | None) -> Cgroup:
-    """The cgroup's CPU quota, throttling, memory events and pid figures.
+    """The cgroup's memory limit and usage, CPU quota, throttling, memory events and pids.
 
-    Only cgroup v2 keeps these in the cgroup's own directory. Missing
-    files, a controller not enabled for this cgroup say, leave the
-    figures at their unknown values.
+    Only cgroup v2 keeps the figures past the memory limit in the
+    cgroup's own directory. Missing files, a controller not enabled for
+    this cgroup say, leave the figures at their unknown values.
     """
     if files is None:
         return Cgroup()
+    memory = dict(
+        memory_limit=_cgroup_bytes(files.limit),
+        memory_high=_cgroup_bytes(files.high),
+        memory_usage=_cgroup_bytes(files.usage),
+    )
     if not files.v2:
-        return Cgroup(path=files.path)
+        return Cgroup(path=files.path, **memory)
     base = files.v2
     cpu = _cgroup_counters(_cgroup_text(f"{base}/cpu.stat"))
     events = _cgroup_counters(_cgroup_text(f"{base}/memory.events"))
     return Cgroup(
         path=files.path,
+        **memory,
         cpu_quota=_cpu_quota(_cgroup_text(f"{base}/cpu.max")),
         periods=cpu.get("nr_periods", 0),
         throttled=cpu.get("nr_throttled", 0),
@@ -577,13 +615,9 @@ def _cpu_list_size(text: str) -> int:
     return count
 
 
-def _linux_cpus_allowed(pid: int) -> int:
-    """The size of the affinity mask, from ``Cpus_allowed_list`` in status."""
-    try:
-        text = _read(f"/proc/{pid}/status")
-    except ProcessLookupError:
-        return 0
-    for line in text.splitlines():
+def _cpus_allowed(status_text: str) -> int:
+    """The size of the affinity mask, from ``Cpus_allowed_list`` in ``/proc/<pid>/status``."""
+    for line in status_text.splitlines():
         if line.startswith("Cpus_allowed_list:"):
             return _cpu_list_size(line.partition(":")[2])
     return 0
@@ -591,45 +625,19 @@ def _linux_cpus_allowed(pid: int) -> int:
 
 def _cgroup_bytes(path: str) -> int:
     """A cgroup byte figure, 0 when unset, unlimited or unreadable."""
-    if not path:
+    text = _cgroup_text(path).strip() if path else ""
+    if not text or text == "max":
         return 0
-    try:
-        with open(path) as f:
-            text = f.read().strip()
-    except OSError:
-        return 0
-    if text == "max":
-        return 0
-    value = int(text)
     # cgroup v1 spells "unlimited" as PAGE_COUNTER_MAX, a number near 2**63.
-    return 0 if value >= 1 << 62 else value
+    return _bounded(int(text))
 
 
-def _linux_limits(pid: int, proc: psutil.Process, cgroup: _CgroupFiles | None) -> MemoryLimits:
-    import resource
-
-    address_space = 0
-    try:
-        soft, _ = proc.rlimit(resource.RLIMIT_AS)
-        # RLIM_INFINITY comes back as -1 or as its unsigned spelling.
-        address_space = 0 if soft < 0 or soft >= 1 << 62 else soft
-    except psutil.NoSuchProcess as e:
-        raise ProcessLookupError(pid) from e
-    except psutil.Error, OSError:
-        pass
+def _linux_limits(pid: int, proc: psutil.Process) -> MemoryLimits:
     try:
         oom_score = int(_read(f"/proc/{pid}/oom_score").strip())
     except ProcessLookupError, ValueError:
         oom_score = -1
-    if cgroup is None:
-        return MemoryLimits(address_space=address_space, oom_score=oom_score)
-    return MemoryLimits(
-        cgroup_limit=_cgroup_bytes(cgroup.limit),
-        cgroup_high=_cgroup_bytes(cgroup.high),
-        cgroup_usage=_cgroup_bytes(cgroup.usage),
-        address_space=address_space,
-        oom_score=oom_score,
-    )
+    return MemoryLimits(address_space=rlimit(proc, "RLIMIT_AS"), oom_score=oom_score)
 
 
 def _linux_threads(pid: int, syscalls: bool = True) -> dict[int, ThreadStat]:

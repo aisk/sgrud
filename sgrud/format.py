@@ -145,17 +145,6 @@ def memory_rows(p: Process) -> list[tuple[str, list[tuple[str, str]]]]:
     ]
     rows.append(("faults", faults))
     limits: list[tuple[str, str]] = []
-    if lim.cgroup_limit:
-        pct = lim.cgroup_percent
-        limits.append(
-            ("cgroup", f"{human_bytes(lim.cgroup_usage)} of {human_bytes(lim.cgroup_limit)}")
-        )
-        if pct is not None:
-            limits.append(("used", f"{pct:.0f}%"))
-        if lim.cgroup_high:
-            limits.append(("high", human_bytes(lim.cgroup_high)))
-    elif lim.cgroup_usage:
-        limits.append(("cgroup", human_bytes(lim.cgroup_usage)))
     if lim.address_space:
         limits.append(("address space", human_bytes(lim.address_space)))
     if lim.oom_score >= 0:
@@ -170,6 +159,17 @@ def memory_rows(p: Process) -> list[tuple[str, list[tuple[str, str]]]]:
 def cgroup_cells(cg: Cgroup) -> list[tuple[str, str]]:
     """The cgroup figures worth a cell, empty for the root cgroup with nothing to say."""
     cells: list[tuple[str, str]] = []
+    if cg.memory_limit:
+        cells.append(
+            ("memory", f"{human_bytes(cg.memory_usage)} of {human_bytes(cg.memory_limit)}")
+        )
+        pct = cg.memory_percent
+        if pct is not None:
+            cells.append(("used", f"{pct:.0f}%"))
+        if cg.memory_high:
+            cells.append(("high", human_bytes(cg.memory_high)))
+    elif cg.memory_usage:
+        cells.append(("memory", human_bytes(cg.memory_usage)))
     if cg.cpu_quota:
         cells.append(("cpu", f"{cg.cpu_quota:g} cores"))
     if cg.throttled_percent is not None:

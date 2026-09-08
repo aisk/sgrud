@@ -201,21 +201,22 @@ def test_linux_maps_and_faults_parsing():
 
 def test_memory_rows_skip_what_the_platform_lacks():
     from sgrud.format import format_memory, memory_rows
-    from sgrud.models import MemoryLimits
+    from sgrud.models import Cgroup, MemoryLimits
 
     p = _process()
     rows = dict(memory_rows(p))
     assert rows["rss"] == [("", "1.0 MiB")]
     assert "brk" not in rows and "uss" not in rows
     assert rows["faults"][0] == ("", "-")
-    assert "limits" not in rows
+    assert "limits" not in rows and "cgroup" not in rows
 
     rich = _process(
         memory=Memory(
             rss=1 << 20, vms=2 << 20, hwm=3 << 20, swap=0, data=0, shared=0, uss=512 << 10, brk=4096
         ),
         fault_rate=12.0,
-        limits=MemoryLimits(cgroup_limit=1 << 30, cgroup_usage=1 << 29, oom_score=5),
+        limits=MemoryLimits(address_space=4 << 30, oom_score=5),
+        cgroup=Cgroup(path="/box", memory_limit=1 << 30, memory_usage=1 << 29),
     )
     lines = format_memory(rich)
     assert lines[0] == "rss=1.0 MiB  peak 3.0 MiB"
@@ -225,7 +226,8 @@ def test_memory_rows_skip_what_the_platform_lacks():
     assert format_memory(_process(fault_rate=0.0, major_fault_rate=250.0))[-1] == (
         "faults=0/s  major 250/s  total 0"
     )
-    assert "limits=cgroup 512.0 MiB of 1.0 GiB  used 50%  oom score 5" in lines
+    assert "limits=address space 4.0 GiB  oom score 5" in lines
+    assert "cgroup=/box  memory 512.0 MiB of 1.0 GiB  used 50%" in lines
 
 
 def test_cgroup_parsing(tmp_path):
@@ -248,6 +250,9 @@ def test_cgroup_parsing(tmp_path):
         "nr_throttled": 3,
     }
 
+    (tmp_path / "memory.max").write_text("1073741824\n")
+    (tmp_path / "memory.high").write_text("max\n")
+    (tmp_path / "memory.current").write_text("536870912\n")
     (tmp_path / "cpu.max").write_text("200000 100000\n")
     (tmp_path / "cpu.stat").write_text(
         "usage_usec 5\nnr_periods 40\nnr_throttled 4\nthrottled_usec 2500000\n"
@@ -255,17 +260,36 @@ def test_cgroup_parsing(tmp_path):
     (tmp_path / "memory.events").write_text("low 0\nhigh 2\nmax 9\noom 1\noom_kill 1\n")
     (tmp_path / "pids.max").write_text("max\n")
     (tmp_path / "pids.current").write_text("17\n")
-    files = _CgroupFiles("/box", "", "", "", str(tmp_path))
+    files = _CgroupFiles(
+        "/box",
+        str(tmp_path / "memory.max"),
+        str(tmp_path / "memory.high"),
+        str(tmp_path / "memory.current"),
+        str(tmp_path),
+    )
     cg = _linux_cgroup(files)
     assert cg.path == "/box"
+    assert (cg.memory_limit, cg.memory_high, cg.memory_usage) == (1 << 30, 0, 1 << 29)
+    assert cg.memory_percent == 50.0
     assert cg.cpu_quota == 2.0
     assert (cg.periods, cg.throttled, cg.throttled_time) == (40, 4, 2.5)
     assert (cg.oom_kills, cg.limit_hits, cg.high_hits) == (1, 9, 2)
     assert (cg.pids_max, cg.pids_current) == (0, 17)
     assert cg.throttled_percent is None
 
-    # A v1 cgroup keeps the path only, a missing directory nothing at all.
-    assert _linux_cgroup(_CgroupFiles("/v1", "", "", "")).path == "/v1"
+    # A v1 cgroup has the memory figures only, a missing directory nothing at all.
+    (tmp_path / "memory.limit_in_bytes").write_text("9223372036854771712\n")
+    (tmp_path / "memory.usage_in_bytes").write_text("4096\n")
+    v1 = _linux_cgroup(
+        _CgroupFiles(
+            "/v1",
+            str(tmp_path / "memory.limit_in_bytes"),
+            "",
+            str(tmp_path / "memory.usage_in_bytes"),
+        )
+    )
+    assert (v1.path, v1.memory_limit, v1.memory_usage, v1.memory_percent) == ("/v1", 0, 4096, None)
+    assert v1.cpu_quota == 0.0 and v1.oom_kills == -1
     assert _linux_cgroup(None).path == ""
     empty = _linux_cgroup(_CgroupFiles("/", "", "", "", str(tmp_path / "gone")))
     assert empty.oom_kills == -1 and empty.cpu_quota == 0.0 and empty.pids_current == 0

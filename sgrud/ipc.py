@@ -26,16 +26,15 @@ from __future__ import annotations
 
 import os
 import platform
-import sys
+import socket
 from collections.abc import Callable, Iterable
+from dataclasses import replace
 from typing import Any
 
 import psutil
 
 from .models import IPC, FileLock, OpenFile, SharedMapping, Syscall
-
-LINUX = sys.platform.startswith("linux")
-WINDOWS = sys.platform == "win32"
+from .osproc import LINUX, WINDOWS, rlimit
 
 #: Descriptors resolved per process. A server holding thousands of
 #: sockets gets the lowest numbered ones listed and the rest counted.
@@ -260,11 +259,8 @@ def _shared_with(files: list[OpenFile], related: Iterable[int]) -> list[OpenFile
             holders.setdefault(inode, []).append(pid)
     if not holders:
         return files
-    import dataclasses
-
     return [
-        dataclasses.replace(f, shared_with=tuple(holders[f.inode])) if f.inode in holders else f
-        for f in files
+        replace(f, shared_with=tuple(holders[f.inode])) if f.inode in holders else f for f in files
     ]
 
 
@@ -290,8 +286,6 @@ def _with_connections(files: list[OpenFile], conns: Iterable[Any]) -> list[OpenF
     is every socket on macOS and Windows. Windows has no descriptor
     numbers at all, so its entries carry fd -1.
     """
-    import dataclasses
-
     by_fd: dict[int, int] = {f.fd: i for i, f in enumerate(files) if f.fd >= 0}
     out = list(files)
     for c in conns:
@@ -303,7 +297,7 @@ def _with_connections(files: list[OpenFile], conns: Iterable[Any]) -> list[OpenF
         status = "" if c.status == psutil.CONN_NONE else c.status
         if fd in by_fd:
             i = by_fd[fd]
-            out[i] = dataclasses.replace(
+            out[i] = replace(
                 out[i], kind="socket", family=family, local=local, remote=remote, status=status
             )
         else:
@@ -322,8 +316,6 @@ def _with_connections(files: list[OpenFile], conns: Iterable[Any]) -> list[OpenF
 
 
 def _family(family, socktype) -> str:
-    import socket
-
     if family == getattr(socket, "AF_UNIX", None):  # missing on Windows
         return "unix"
     v6 = "6" if family == socket.AF_INET6 else ""
@@ -469,17 +461,8 @@ def read_ipc(
     Raises ProcessLookupError when the process is gone.
     """
     pid = proc.pid
-    max_fds = 0
+    max_fds = rlimit(proc, "RLIMIT_NOFILE")
     if LINUX:
-        import resource
-
-        try:
-            soft, _ = proc.rlimit(resource.RLIMIT_NOFILE)
-            max_fds = 0 if soft < 0 or soft >= 1 << 62 else soft
-        except psutil.NoSuchProcess as e:
-            raise ProcessLookupError(pid) from e
-        except psutil.Error, OSError:
-            pass
         files, num_fds = _linux_files(pid)
         if any(f.kind == "socket" for f in files):
             files = _with_connections(files, connections_of(proc))
