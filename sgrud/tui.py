@@ -831,7 +831,9 @@ class SgrudApp(App[int]):
     # -- data flow -----------------------------------------------------
 
     def refresh_snapshot(self, force: bool = False) -> None:
-        if self.exited or (self.paused and not force):
+        # Textual removes the widgets before it stops the timers on shutdown,
+        # so a tick in between finds nothing to render into.
+        if not self.is_running or self.exited or (self.paused and not force):
             return
         try:
             snap = self.monitor.snapshot(**self.sections)
