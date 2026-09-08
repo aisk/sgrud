@@ -28,26 +28,32 @@ def test_demo_app_has_something_on_every_tab():
                 stacks = {t.tid: {f.funcname for f in t.frames} for t in snap.threads}
                 tasks = {t.name: t for t in snap.tasks}
                 pythons = [c for c in snap.children if c.python]
+                ipc = snap.ipc
+                # The server listens before the socket-reader thread starts,
+                # but psutil on macOS drops a socket whenever the kernel
+                # refuses its info, so the listener needs the retries too.
+                listening = ipc is not None and any(
+                    f.kind == "socket" and f.status == "LISTEN" for f in ipc.files
+                )
                 ready = (
                     all(any(name in s for s in stacks.values()) for name in wanted_threads)
                     and wanted_tasks <= set(tasks)
                     and len(pythons) >= 2
                     and len(snap.children) > len(pythons)
+                    and listening
                 )
                 if ready or time.monotonic() > deadline:
                     break
                 time.sleep(0.2)
-            assert ready, (stacks, set(tasks), snap.children)
+            assert ready, (stacks, set(tasks), snap.children, ipc and ipc.files)
             assert not snap.errors, snap.errors
 
             # The task tree: consumers hang off the supervisor, which hangs off main.
             assert tasks["consumer-2"].parent_ids == (tasks["supervisor"].id,)
             assert tasks["supervisor"].parent_ids == tasks["quiet-1"].parent_ids
 
-            ipc = snap.ipc
             assert ipc is not None
             kinds = ipc.counts()
-            assert any(f.kind == "socket" and f.status == "LISTEN" for f in ipc.files), ipc.files
             if sys.platform.startswith("linux"):
                 # psutil lists no pipes and fewer sockets elsewhere.
                 assert kinds.get("pipe", 0) >= 1 and kinds.get("socket", 0) >= 6, kinds
