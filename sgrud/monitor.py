@@ -173,9 +173,11 @@ class Monitor:
         self._proc_cpu: _RateSample | None = None
         self._thread_cpu: dict[int, _RateSample] = {}
         self._child_cpu: dict[int, _RateSample] = {}
-        # Whether a child is a CPython process. A fresh interpreter says no
-        # until it has mapped its runtime, so only a yes is final.
-        self._child_python: dict[int, bool] = {}
+        # Whether a child is a CPython process, with the name it had then. A
+        # fresh interpreter says no until it has mapped its runtime, so only
+        # a yes is kept, and only until an exec changes the name: a forked
+        # child still carries the parent's runtime before it execs.
+        self._child_python: dict[int, tuple[str, bool]] = {}
         self._faults: _RateSample | None = None
         self._throttle: _RateSample | None = None
         self._gc = _GCTracker()
@@ -529,13 +531,13 @@ class Monitor:
             del self._child_python[gone]
         out: list[ChildProcess] = []
         for c in stats:
-            python = self._child_python.get(c.pid, False)
-            if not python:
+            name, python = self._child_python.get(c.pid, (c.name, False))
+            if not python or name != c.name:
                 # Without memory access fall back to the executable's name.
                 python = is_python_process(c.pid) or (
                     self.limited is not None and osproc.looks_like_python(c.pid)
                 )
-                self._child_python[c.pid] = python
+                self._child_python[c.pid] = (c.name, python)
             cpu_percent, self._child_cpu[c.pid] = _cpu_percent(
                 self._child_cpu.get(c.pid), now, c.utime + c.stime
             )

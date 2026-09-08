@@ -297,7 +297,7 @@ def test_children_are_listed_and_marked_python():
                 snap = m.snapshot(stacks=False, tasks=False, gc=False)
                 kids = {c.pid: c for c in snap.children}
                 pythons = [c for c in kids.values() if c.python]
-                if len(kids) >= 3 and len(pythons) >= 2 or time.monotonic() > deadline:
+                if len(kids) >= 3 and len(pythons) == 2 or time.monotonic() > deadline:
                     break
                 time.sleep(0.1)
             assert "children" not in snap.errors, snap.errors
