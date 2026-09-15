@@ -219,10 +219,10 @@ async def test_tui_hotspots_tab(monitor, tmp_path):
         await pilot.pause()
         assert app.hotspots.samples < before / 2
         await pilot.press("m")
-        assert app.sample_mode == "gil" and app.sampler.mode == "gil"
+        assert app.sample_mode == "wall" and app.sampler.mode == "wall"
         await pilot.press("q")
     assert not app.sampler.running
-    # The recording survives the mode switch and is closed on exit.
+    # The recording keeps its mode and is closed on exit.
     assert record.stat().st_size > 0
 
 
@@ -275,3 +275,21 @@ async def test_tui_flame_tab(monitor):
         await pilot.pause()
         assert app.hotspots.samples < before / 2
         await pilot.press("q")
+
+
+async def test_recording_keeps_its_sampling_mode(monitor, tmp_path):
+    app = SgrudApp(monitor, sample_mode="gil", record=str(tmp_path / "out.bin"))
+    async with app.run_test() as pilot:
+        assert app.sampler is not None
+        assert app.sampler.recorders[0].mode == "gil"
+        await pilot.press("5", "m")
+        assert app.sample_mode == app.sampler.mode == "gil"
+        assert app.sampler.recorders[0].mode == "gil"
+
+
+async def test_mode_switch_without_recording(monitor):
+    app = SgrudApp(monitor)
+    async with app.run_test() as pilot:
+        await pilot.press("5", "m")
+        assert app.sampler is not None
+        assert app.sample_mode == app.sampler.mode == "gil"

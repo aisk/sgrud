@@ -536,7 +536,9 @@ class SgrudApp(App[int]):
         if sample_rate > 0 and monitor.limited is None:
             recorders = []
             if record:
-                recorders.append(Recorder(record, "binary", interval=1 / sample_rate))
+                recorders.append(
+                    Recorder(record, "binary", interval=1 / sample_rate, mode=sample_mode)
+                )
             self.sampler = Sampler(
                 monitor, self.hotspots, rate=sample_rate, mode=sample_mode, recorders=recorders
             )
@@ -747,6 +749,9 @@ class SgrudApp(App[int]):
             self._update_hotspots(self.snapshot)
 
     def action_toggle_mode(self) -> None:
+        if self.sampler is not None and self.sampler.recorders:
+            self.notify("Sampling mode is fixed for this recording", severity="warning")
+            return
         self.sample_mode = MODES[(MODES.index(self.sample_mode) + 1) % len(MODES)]
         if self.sampler is not None:
             self.sampler.mode = self.sample_mode
@@ -1207,8 +1212,8 @@ class SgrudApp(App[int]):
 
 
 def run_tui(monitor: Monitor, **options) -> int:
-    app = SgrudApp(monitor, **options)
     try:
+        app = SgrudApp(monitor, **options)
         app.run()
     finally:
         monitor.close()

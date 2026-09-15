@@ -194,9 +194,9 @@ def test_hotspots_async_mode_counts_each_task():
     # Two task stacks per sample, so four thread-samples in total.
     assert rows["sleep"].self_samples == 4 and rows["sleep"].self_percent == 100.0
     assert rows["main"].total_percent == 100.0 and rows["main"].self_samples == 0
-    assert rows["<task w2>"].total_percent == 50.0
+    assert rows["<task>"].total_percent == 100.0
     tree = hot.call_tree(thread=100)
-    assert list(tree.children) == [("<task root>", "~")]
+    assert list(tree.children) == [("<task>", "~")]
 
 
 def test_sampler_async_mode_sees_sleeping_tasks(monitor):
@@ -209,13 +209,13 @@ def test_sampler_async_mode_sees_sleeping_tasks(monitor):
     assert "busy_loop" not in rows
     assert rows["sleep"].self_percent > 50
     assert rows["leaf"].total_percent > 50
-    assert rows["<task branch-0>"].total_samples > 0
+    assert rows["<task>"].total_samples > 0
     # main() creates the branches without awaiting them, so it is a leaf of
     # its own next to the six sleeping leaves, roughly one stack in seven.
     # It only runs to churn objects twice a second, so almost never on top.
     assert rows["main"].self_percent < 5
     assert 5 < rows["main"].total_percent < 25
-    assert rows["<task Task-1>"].total_samples == rows["main"].total_samples
+    assert rows["<task>"].total_samples >= rows["main"].total_samples
 
 
 def test_sampler_cpu_mode_counts_only_running_threads(monitor):
@@ -339,3 +339,12 @@ def test_torn_reads_are_retried(monitor, monkeypatch):
     assert calls == 5
     assert inspector.sample(retries=0).stacks()
     assert calls == 6
+
+
+def test_finished_task_names_do_not_accumulate():
+    hot = Hotspots()
+    for i in range(10000):
+        hot.add_tasks([Task(i, f"Task-{i}", 100, (_f("worker"),))])
+    assert len(hot.folded()) == 1
+    assert len(hot.rows()) == 2
+    assert hot.rows()[0].total_samples == 10000

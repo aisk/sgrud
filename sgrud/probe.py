@@ -26,6 +26,8 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+import psutil
+
 from .errors import ProcessExited, SgrudError
 
 #: What the script writes back, as a JSON object.
@@ -68,9 +70,12 @@ try:
 except BaseException as _e:
     _out = {"error": f"{type(_e).__name__}: {_e}"}
 _out["elapsed"] = time.perf_counter() - _t0
-with open(RESULT + ".tmp", "w") as _f:
-    json.dump(_out, _f)
-os.replace(RESULT + ".tmp", RESULT)
+try:
+    with open(RESULT + ".tmp", "x") as _f:
+        json.dump(_out, _f)
+    os.replace(RESULT + ".tmp", RESULT)
+except FileNotFoundError:
+    pass  # The caller timed out and removed its private directory.
 """
 
 
@@ -148,15 +153,26 @@ def probe(pid: int, *, types: int = 0, allocations: int = 10, timeout: float = 5
     """
     if not hasattr(sys, "remote_exec"):
         raise SgrudError("this Python has no sys.remote_exec, so it cannot probe")
-    fd, result = tempfile.mkstemp(prefix="sgrud-probe-", suffix=".json")
-    os.close(fd)
-    os.unlink(result)  # the script creates it, its presence means done
-    script = result[: -len(".json")] + ".py"
-    with open(script, "w") as f:
-        f.write(f"TYPES = {int(types)}\nALLOCATIONS = {int(allocations)}\nRESULT = {result!r}\n")
-        f.write(_SCRIPT)
+    directory = tempfile.TemporaryDirectory(prefix="sgrud-probe-")
+    result = os.path.join(directory.name, "result.json")
+    script = os.path.join(directory.name, "probe.py")
     started = time.monotonic()
     try:
+        with open(script, "x") as f:
+            f.write(
+                f"TYPES = {int(types)}\nALLOCATIONS = {int(allocations)}\nRESULT = {result!r}\n"
+            )
+            f.write(_SCRIPT)
+        # A root inspector may probe an unprivileged target (required on
+        # macOS). Give that target access without opening the directory
+        # to other users, even under a restrictive inspector umask.
+        if os.name == "posix" and os.geteuid() == 0:
+            try:
+                target_uid = psutil.Process(pid).uids().effective
+            except psutil.NoSuchProcess as e:
+                raise ProcessExited(pid) from e
+            os.chown(script, target_uid, -1)
+            os.chown(directory.name, target_uid, -1)
         try:
             sys.remote_exec(pid, script)
         except ProcessLookupError as e:
@@ -180,11 +196,7 @@ def probe(pid: int, *, types: int = 0, allocations: int = 10, timeout: float = 5
         with open(result) as f:
             data = json.load(f)
     finally:
-        for path in (script, result, result + ".tmp"):
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
+        directory.cleanup()
     if "error" in data:
         raise SgrudError(f"the probe failed inside process {pid}: {data['error']}")
     trace = data.get("tracemalloc") or {}

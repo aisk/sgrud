@@ -294,11 +294,15 @@ def _profile(args: argparse.Namespace) -> int:
             )
             return 1
         sampler = Sampler(monitor, rate=args.rate, mode=args.mode, recorders=recorders)
-        with sampler:
-            deadline = time.monotonic() + args.duration
-            while time.monotonic() < deadline and sampler.exited is None:
-                time.sleep(0.05)
-        sampler.close()
+        try:
+            with sampler:
+                deadline = time.monotonic() + args.duration
+                while time.monotonic() < deadline and sampler.exited is None:
+                    time.sleep(0.05)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            sampler.close()
         if not recorders:
             return _print_hotspots(monitor, sampler, args)
         for recorder in recorders:
@@ -387,6 +391,13 @@ def _probe(args: argparse.Namespace) -> int:
 def _top(args: argparse.Namespace) -> int:
     from .tui import run_tui
 
+    if args.record and (args.mode == "async" or args.rate <= 0 or args.web):
+        print(
+            "sgrud: --record needs a positive sample rate, a thread sampling mode, "
+            "and the terminal interface",
+            file=sys.stderr,
+        )
+        return 1
     command = args.command_argv
     if args.web:
         try:

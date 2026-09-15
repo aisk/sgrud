@@ -88,6 +88,8 @@ class Recorder:
         self._collector = _make_collector(self.format, path, interval, baseline)
 
     def collect(self, sample: RawSample) -> None:
+        if sample.mode != self.mode:
+            raise SgrudError(f"cannot record {sample.mode} samples in a {self.mode} recording")
         self._collector.collect(sample.data)
         self.samples += 1
 

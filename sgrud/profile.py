@@ -128,7 +128,7 @@ class Hotspots:
 
     def add_tasks(self, tasks: Iterable[Task]) -> None:
         """Record one sample of asyncio tasks, see :func:`task_stacks`."""
-        self.add_stacks(task_stacks(tasks))
+        self.add_stacks(task_stacks(tasks, task_names=False))
 
     def add_frames(self, frames_by_tid: Mapping[int, tuple[Frame, ...]]) -> None:
         self.add_stacks(frames_by_tid.items())
@@ -298,7 +298,9 @@ class Hotspots:
         return lines
 
 
-def task_stacks(tasks: Iterable[Task]) -> list[tuple[int, tuple[Frame, ...]]]:
+def task_stacks(
+    tasks: Iterable[Task], *, task_names: bool = True
+) -> list[tuple[int, tuple[Frame, ...]]]:
     """Join asyncio tasks into linear stacks, one per innermost task.
 
     A task that no other task awaits through is a leaf. Its stack is its own
@@ -308,6 +310,7 @@ def task_stacks(tasks: Iterable[Task]) -> list[tuple[int, tuple[Frame, ...]]]:
     shows ``main -> gather -> worker`` even though the worker task runs on no
     thread's stack. Returns ``(thread_id, frames)`` pairs, leaf frame first.
     A task awaited by several tasks follows the first of them.
+    ``task_names=False`` uses stable markers for aggregate hotspot counts.
     """
     by_id = {t.id: t for t in tasks}
     awaiting: set[int] = set()
@@ -323,7 +326,11 @@ def task_stacks(tasks: Iterable[Task]) -> list[tuple[int, tuple[Frame, ...]]]:
         while task is not None and task.id not in seen:
             seen.add(task.id)
             frames.extend(task.frames)
-            frames.append(Frame(f"<task {task.name}>", "~"))
+            # Instance names often contain an ever-increasing task number.
+            # Aggregation uses a stable boundary so finished tasks do not
+            # leave a distinct stack behind for every request.
+            marker = f"<task {task.name}>" if task_names else "<task>"
+            frames.append(Frame(marker, "~"))
             parents = [by_id[p] for p in task.parent_ids if p in by_id]
             task = parents[0] if parents else None
         stacks.append((leaf.thread_id, tuple(frames)))
