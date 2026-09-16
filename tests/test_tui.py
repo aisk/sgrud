@@ -327,7 +327,12 @@ async def test_inspect_child_and_return_after_child_exit():
                 await pilot.pause(0.1)
             assert app.snapshot is not None
             child = next(c for c in app.snapshot.children if c.python)
-            await pilot.press("4", "enter")
+            await pilot.press("4")
+            # Windows venv launchers can occupy the first row. Select the
+            # interpreter we found instead of assuming it is the first child.
+            table = app.query_one("#children-table", DataTable)
+            table.move_cursor(row=table.get_row_index(str(child.pid)))
+            await pilot.press("enter")
             assert app.monitor.pid == child.pid
             assert app._parents == [root]
             assert app.snapshot is not None and app.snapshot.process.pid == child.pid
