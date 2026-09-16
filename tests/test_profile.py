@@ -348,3 +348,49 @@ def test_finished_task_names_do_not_accumulate():
     assert len(hot.folded()) == 1
     assert len(hot.rows()) == 2
     assert hot.rows()[0].total_samples == 10000
+
+
+@pytest.mark.parametrize("window", [30.0, 300.0])
+def test_window_expires_recursion_tasks_and_idle_samples(monkeypatch, window):
+    now = [1000.0]
+    monkeypatch.setattr("sgrud.profile.time.monotonic", lambda: now[0])
+    hot = Hotspots(window=window)
+    hot.add_frames({1: (_f("old"), _f("old"))})
+    now[0] += 1
+    hot.add_stacks([(2, (_f("new"),)), (2, (_f("new"),))])
+    hot.add_frames({})
+    now[0] = 1000 + window
+    rows = hot.rows()
+    assert [(r.funcname, r.self_samples, r.total_samples) for r in rows] == [("new", 2, 2)]
+    assert hot.samples == 2
+    assert hot.thread_ids == [2]
+    assert hot.call_tree().total == 2
+    assert len(hot.folded()) == 1
+    assert hot.rate() == pytest.approx(2 / window)
+    now[0] += 1
+    assert hot.rows() == []
+    assert hot.thread_ids == []
+    assert hot.samples == 0
+    assert hot.call_tree().total == 0
+    assert hot.gc_sites() == (0, 0, [])
+    assert hot.rate() == 0
+    hot.add_frames({1: (_f("again"),)})
+    hot.reset()
+    now[0] += window + 1
+    assert hot.rows() == [] and hot.samples == 0
+
+
+def test_cumulative_hotspots_keep_old_samples(monkeypatch):
+    now = [10.0]
+    monkeypatch.setattr("sgrud.profile.time.monotonic", lambda: now[0])
+    hot = Hotspots()
+    hot.add_frames({1: (_f("old"),)})
+    now[0] += 10000
+    assert hot.rows()[0].funcname == "old"
+    assert hot.samples == 1
+
+
+@pytest.mark.parametrize("window", [0, -1, float("inf"), float("nan")])
+def test_invalid_window(window):
+    with pytest.raises(ValueError, match="window"):
+        Hotspots(window=window)

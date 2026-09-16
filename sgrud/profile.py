@@ -8,9 +8,10 @@ sorted rows. It is safe to feed from one thread and read from another.
 
 from __future__ import annotations
 
+import math
 import threading
 import time
-from collections import Counter
+from collections import Counter, deque
 from collections.abc import Hashable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 
@@ -105,10 +106,24 @@ class _ThreadCounts:
     stacks: Counter[StackKey] = field(default_factory=Counter)
 
 
-class Hotspots:
-    """Counts self and total samples per function, per thread."""
+def _subtract[K](counter: Counter[K], key: K, count: int) -> None:
+    counter[key] -= count
+    if counter[key] == 0:
+        del counter[key]
 
-    def __init__(self) -> None:
+
+class Hotspots:
+    """Counts self and total samples per function, per thread.
+
+    ``window`` limits aggregation to the last N seconds; None accumulates
+    until reset. Window history is discarded as samples age out.
+    """
+
+    def __init__(self, *, window: float | None = None) -> None:
+        if window is not None and (window <= 0 or not math.isfinite(window)):
+            raise ValueError("window must be finite and positive")
+        self.window = window
+        self._history: deque[tuple[float, Counter[tuple[int, StackKey]]]] = deque()
         self._lock = threading.Lock()
         self._threads: dict[int, _ThreadCounts] = {}
         self.samples = 0
@@ -118,6 +133,7 @@ class Hotspots:
     def reset(self) -> None:
         with self._lock:
             self._threads.clear()
+            self._history.clear()
             self.samples = 0
             self.started = time.monotonic()
             self.last_sample_at = None
@@ -141,6 +157,8 @@ class Hotspots:
         counts as one sample of that thread.
         """
         with self._lock:
+            self._expire()
+            recorded: Counter[tuple[int, StackKey]] = Counter()
             self.samples += 1
             self.last_sample_at = time.monotonic()
             for tid, frames in stacks:
@@ -152,7 +170,10 @@ class Hotspots:
                 counts.samples += 1
                 leaf = frames[0]
                 counts.self_counts[(leaf.funcname, leaf.filename)] += 1
-                counts.stacks[tuple((f.funcname, f.filename) for f in reversed(frames))] += 1
+                stack = tuple((f.funcname, f.filename) for f in reversed(frames))
+                counts.stacks[stack] += 1
+                if self.window is not None:
+                    recorded[(tid, stack)] += 1
                 # Count each function once per sample so recursion does not
                 # inflate its total beyond 100 percent.
                 seen: set[FunctionKey] = set()
@@ -162,15 +183,42 @@ class Hotspots:
                         seen.add(key)
                         counts.total_counts[key] += 1
 
+            if self.window is not None:
+                self._history.append((self.last_sample_at, recorded))
+
+    def _expire(self) -> None:
+        """Remove expired samples while holding the lock, including idle reads."""
+        if self.window is None:
+            return
+        cutoff = time.monotonic() - self.window
+        while self._history and self._history[0][0] <= cutoff:
+            _, stacks = self._history.popleft()
+            self.samples -= 1
+            for (tid, stack), n in stacks.items():
+                counts = self._threads[tid]
+                counts.samples -= n
+                _subtract(counts.stacks, stack, n)
+                _subtract(counts.self_counts, stack[-1], n)
+                for key in set(stack):
+                    _subtract(counts.total_counts, key, n)
+                if counts.samples == 0:
+                    del self._threads[tid]
+
     @property
     def thread_ids(self) -> list[int]:
         with self._lock:
+            self._expire()
             return sorted(self._threads)
 
     def rate(self) -> float:
         """Achieved samples per second since the last reset."""
-        elapsed = (self.last_sample_at or self.started) - self.started
-        return self.samples / elapsed if elapsed > 0 else 0.0
+        with self._lock:
+            self._expire()
+            if self.window is not None:
+                elapsed = min(time.monotonic() - self.started, self.window)
+            else:
+                elapsed = (self.last_sample_at or self.started) - self.started
+            return self.samples / elapsed if elapsed > 0 else 0.0
 
     def rows(
         self,
@@ -185,6 +233,7 @@ class Hotspots:
         number of samples in which the selected thread(s) had a Python stack.
         """
         with self._lock:
+            self._expire()
             if thread is None:
                 selected = list(self._threads.values())
             else:
@@ -229,6 +278,7 @@ class Hotspots:
         collector run. Needs the monitor's ``gc_markers`` option, the default.
         """
         with self._lock:
+            self._expire()
             if thread is None:
                 selected = list(self._threads.values())
             else:
@@ -252,6 +302,7 @@ class Hotspots:
 
     def _stacks(self, thread: int | None) -> list[tuple[int, dict[StackKey, int]]]:
         with self._lock:
+            self._expire()
             if thread is None:
                 return [(tid, dict(c.stacks)) for tid, c in sorted(self._threads.items())]
             counts = self._threads.get(thread)

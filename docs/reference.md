@@ -112,6 +112,9 @@ Async hotspot aggregation uses a stable `<task>` boundary instead of task instan
 | `q` | quit |
 | `f` | thread filter (Hotspots and Flame) |
 | `m` | cycle the sampling mode (Hotspots and Flame) |
+| `w` | cycle cumulative / last 30 seconds / last 5 minutes (Hotspots and Flame) |
+| `enter` | inspect the selected Python child (Process) |
+| `b` | return to the previously inspected parent |
 | `x` | probe the target (GC) |
 | `c` | clear samples (Hotspots and Flame) |
 | `s` | toggle self/total ordering (Hotspots) |
@@ -121,7 +124,7 @@ Arrow keys move through the current tab's content right away.
 
 ### Process
 
-The Process tab breaks memory down as far as the platform allows, see [Platforms](#platforms), and lists the target's child processes with their CPU and memory, marking the ones that are Python interpreters, so a `multiprocessing` pool or a worker started by a supervisor is one glance away. Any of them can be inspected with a second `sgrud PID`. On Linux the tab also shows the cgroup the target runs in, the container's cgroup say: its memory limit and usage, its CPU quota and the share of periods it was throttled in, OOM kills, and the pid limit, which threads count against, next to how many CPUs the process may run on. Every cgroup figure is for the whole cgroup, not just the target.
+The Process tab breaks memory down as far as the platform allows, see [Platforms](#platforms), and lists the target's child processes with their CPU and memory, marking the ones that are Python interpreters, so a `multiprocessing` pool or a worker started by a supervisor is one glance away. Select a Python child and press `enter` to inspect it in the same interface; `b` returns to the previous target, including after the child exits. Each switch clears the displayed histories and hotspots while keeping the sampling mode, window and refresh interval. Failed attachment leaves the current target intact. Returning from a child does not terminate it. Process switching is disabled during recording or a probe. On Linux the tab also shows the cgroup the target runs in, the container's cgroup say: its memory limit and usage, its CPU quota and the share of periods it was throttled in, OOM kills, and the pid limit, which threads count against, next to how many CPUs the process may run on. Every cgroup figure is for the whole cgroup, not just the target.
 
 ### Threads
 
@@ -147,7 +150,7 @@ The GC tab shows the share of wall time spent collecting, collections per second
 
 *The Flame tab: the same samples as a flame graph, one block per thread on the first row.*
 
-Hotspots and Flame share one background sampler (`--rate`, default 100 Hz) that keeps running while you look at other tabs. The flame graph grows from the bottom and gives each thread its own block on the first row, so an idle thread shows up as a tall column instead of being mixed into the others.
+Hotspots and Flame share one background sampler (`--rate`, default 100 Hz) that keeps running while you look at other tabs. Press `w` to cycle cumulative, last 30 seconds and last 5 minutes. Switching windows starts a fresh aggregation; expired samples are removed from the hotspot table, flame graph and GC trigger sites, including when sampling stops. Recording still receives every sample independently of the display window. Library callers can use `Hotspots(window=30)` for the same behavior. The flame graph grows from the bottom and gives each thread its own block on the first row, so an idle thread shows up as a tall column instead of being mixed into the others.
 
 ### IPC
 

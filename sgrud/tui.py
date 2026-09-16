@@ -499,6 +499,8 @@ class SgrudApp(App[int]):
         Binding("c", "clear_hotspots", "Clear samples"),
         Binding("m", "toggle_mode", "Mode"),
         Binding("x", "probe", "Probe target"),
+        Binding("w", "toggle_window", "Window"),
+        Binding("b", "parent_process", "Back to parent"),
     ]
 
     #: The widget that gets focus when a tab becomes active.
@@ -529,6 +531,8 @@ class SgrudApp(App[int]):
         """``record`` is a path for a binary recording of every sample taken."""
         super().__init__()
         self.monitor = monitor
+        self._parents: list[Monitor] = []
+        self._sample_rate = sample_rate
         self.hotspots = Hotspots()
         #: The sampling mode, kept here too so it shows without a sampler.
         self.sample_mode = sample_mode
@@ -666,6 +670,11 @@ class SgrudApp(App[int]):
     def on_unmount(self) -> None:
         if self.sampler is not None:
             self.sampler.close()
+        # The caller owns the initial monitor (and any spawned process).
+        if self._parents:
+            self.monitor.close(kill_child=False)
+            for monitor in self._parents[1:]:
+                monitor.close(kill_child=False)
 
     # -- actions -------------------------------------------------------
 
@@ -727,9 +736,12 @@ class SgrudApp(App[int]):
         "clear_hotspots": ("hotspots", "flame"),
         "toggle_mode": ("hotspots", "flame"),
         "probe": ("gc",),
+        "toggle_window": ("hotspots", "flame"),
     }
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "parent_process":
+            return bool(self._parents)
         tabs = self.TAB_ACTIONS.get(action)
         if tabs is not None:
             return self.query_one("#tabs", TabbedContent).active in tabs
@@ -807,6 +819,107 @@ class SgrudApp(App[int]):
                 + f"  of {human_count(result.tracked)} tracked"
             )
         info.update(text)
+
+    def action_toggle_window(self) -> None:
+        windows = (None, 30.0, 300.0)
+        window = windows[(windows.index(self.hotspots.window) + 1) % len(windows)]
+        if self.sampler is not None:
+            self.sampler.stop()
+        self.hotspots = Hotspots(window=window)
+        if self.sampler is not None:
+            self.sampler.hotspots = self.hotspots
+            if not self.exited:
+                self.sampler.start()
+        if self.snapshot:
+            self._update_hotspots(self.snapshot)
+            self._update_flame(self.snapshot)
+
+    def _can_switch_process(self) -> bool:
+        if self._probing:
+            self.notify("Wait for the probe to finish", severity="warning")
+            return False
+        if self.sampler is not None and self.sampler.recorders:
+            self.notify("Target process is fixed for this recording", severity="warning")
+            return False
+        return True
+
+    @on(DataTable.RowSelected, "#children-table")
+    def _inspect_child(self, event: DataTable.RowSelected) -> None:
+        if not self._can_switch_process() or self.snapshot is None:
+            return
+        child = next((c for c in self.snapshot.children if str(c.pid) == event.row_key.value), None)
+        if child is None or not child.python:
+            self.notify("Select a Python child process", severity="warning")
+            return
+        opts = self.monitor._inspector_opts
+        monitor = None
+        try:
+            monitor = Monitor.attach(
+                child.pid,
+                native_frames=opts["native"],
+                gc_markers=opts["gc_markers"],
+                cache_frames=opts["cache_frames"],
+                opcodes=opts["opcodes"],
+            )
+            snap = monitor.snapshot(**self.sections)
+        except (SgrudError, OSError) as exc:
+            if monitor is not None:
+                monitor.close(kill_child=False)
+            self.notify(str(exc), severity="error")
+            return
+        self._parents.append(self.monitor)
+        self._switch_process(monitor, snap)
+
+    def action_parent_process(self) -> None:
+        if not self._parents or not self._can_switch_process():
+            return
+        parent = self._parents[-1]
+        try:
+            snap = parent.snapshot(**self.sections)
+        except (SgrudError, OSError) as exc:
+            self.notify(str(exc), severity="error")
+            return
+        previous = self.monitor
+        self._parents.pop()
+        self._switch_process(parent, snap)
+        previous.close(kill_child=False)
+
+    def _switch_process(self, monitor: Monitor, snap: Snapshot) -> None:
+        if self.sampler is not None:
+            self.sampler.close()
+        self.monitor = monitor
+        self.hotspots = Hotspots(window=self.hotspots.window)
+        self.sampler = None
+        if self._sample_rate > 0 and monitor.limited is None:
+            self.sampler = Sampler(
+                monitor, self.hotspots, rate=self._sample_rate, mode=self.sample_mode
+            ).start()
+        self.exited = None
+        self.paused = False
+        self.hot_thread = None
+        self._hot_options = ()
+        self._selected_tid = self._selected_task = None
+        self._last_thread = self._last_task = None
+        self.probe_result = None
+        self.query_one("#probe-info", Static).update("x probes this target")
+        for history in (
+            self.rss_history,
+            self.cpu_history,
+            self.fault_history,
+            self.heap_history,
+            self.gc_history,
+        ):
+            history.clear()
+        self.query_one("#thread-stack", StackPanel).show("", ())
+        self.query_one("#task-stack", StackPanel).show("", ())
+        banner = self.query_one("#banner", Static)
+        banner.display = monitor.limited is not None
+        banner.update(Text(monitor.limited or ""))
+        self.query_one(FlameGraph).set_tree(CallNode("all threads", "", None))
+        self.apply_snapshot(snap)
+        self._set_interval(self.interval)
+        self.refresh_bindings()
+        self.notify(f"Inspecting process {monitor.pid}")
 
     def action_clear_hotspots(self) -> None:
         self.hotspots.reset()
@@ -1074,12 +1187,18 @@ class SgrudApp(App[int]):
     def _update_children(self, snap: Snapshot) -> None:
         label = self.query_one("#children-label", Static)
         table = self.query_one("#children-table", DataTable)
+        selected = (
+            table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+            if table.row_count
+            else None
+        )
         if not snap.children:
+            table.clear()
             label.update(Text("no child processes", "dim"))
             table.display = False
             return
         pythons = sum(c.python for c in snap.children)
-        label.update(f"children: {len(snap.children)}, {pythons} python")
+        label.update(f"children: {len(snap.children)}, {pythons} python — Enter to inspect")
         table.display = True
         depth = {c.pid: 0 for c in snap.children}
         for c in snap.children:
@@ -1097,6 +1216,8 @@ class SgrudApp(App[int]):
                 "  " * depth[c.pid] + cmd,
                 key=str(c.pid),
             )
+        if selected is not None and any(str(c.pid) == selected for c in snap.children):
+            table.move_cursor(row=table.get_row_index(selected))
 
     def _update_ipc(self, snap: Snapshot) -> None:
         info = self.query_one("#ipc-info", Static)
@@ -1157,6 +1278,8 @@ class SgrudApp(App[int]):
             if self.sampler.errors:
                 info.append(f", {self.sampler.errors} failed", "yellow")
         info.append(f"  mode: {self.sample_mode}", "cyan")
+        window = "cumulative" if hot.window is None else f"last {hot.window:g}s"
+        info.append(f"  window: {window}", "cyan")
         return info
 
     def _update_hotspots(self, snap: Snapshot) -> None:
