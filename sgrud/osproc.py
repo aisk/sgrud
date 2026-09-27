@@ -27,6 +27,7 @@ import sys
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 import psutil
@@ -129,6 +130,24 @@ def _optional(fn: Callable[[], Any], default: Any) -> Any:
         return default
 
 
+def _allowed(fn: Callable[[], Any], default: Any) -> Any:
+    """Call ``fn``, ``default`` when the OS denies it. A zombie still counts as gone."""
+    try:
+        return fn()
+    except psutil.ZombieProcess:
+        raise
+    except psutil.AccessDenied:
+        return default
+
+
+# Stand-ins for the psutil tuples when the OS denies them, with every
+# field any platform reads.
+_NO_CPU = SimpleNamespace(user=0.0, system=0.0)
+_NO_MEMORY = SimpleNamespace(
+    rss=0, vms=0, data=0, shared=0, peak_wset=0, private=0, num_page_faults=0, pfaults=0, pageins=0
+)
+
+
 class ProcessStats:
     """A handle on one process that is cheap to query repeatedly."""
 
@@ -180,9 +199,11 @@ class ProcessStats:
                 state = p.status()
                 if state == psutil.STATUS_ZOMBIE:
                     raise ProcessLookupError(self.pid)
-                cpu = p.cpu_times()
-                mem = p.memory_info()
-                num_threads = p.num_threads()
+                # Another user's process on macOS denies these, which
+                # leaves the figures at zero rather than the snapshot failing.
+                cpu = _allowed(p.cpu_times, _NO_CPU)
+                mem = _allowed(p.memory_info, _NO_MEMORY)
+                num_threads = _allowed(p.num_threads, 0)
                 exe = _optional(p.exe, "")
                 cmdline = tuple(_optional(p.cmdline, ()))
         except psutil.NoSuchProcess as e:
@@ -276,8 +297,13 @@ class ProcessStats:
             except psutil.NoSuchProcess, psutil.ZombieProcess:
                 continue
             except psutil.AccessDenied:
-                # A setuid child, say. Still worth listing.
-                out.append(ChildStat(p.pid, self.pid, "", (), "", 0, 0, 0.0, 0.0, 0.0))
+                # A setuid child, say. Still worth listing, under its own
+                # parent when the OS tells, since the list is recursive.
+                try:
+                    ppid = p.ppid()
+                except psutil.Error:
+                    ppid = self.pid
+                out.append(ChildStat(p.pid, ppid, "", (), "", 0, 0, 0.0, 0.0, 0.0))
         return out
 
     def threads(self, *, syscalls: bool = True) -> dict[int, ThreadStat]:
@@ -352,6 +378,9 @@ def can_read_memory(pid: int) -> bool | None:
     try:
         with open(f"/proc/{pid}/maps") as maps:
             first = maps.readline()
+        if not first:
+            # A zombie or a kernel thread has no mappings to try.
+            return None
         start = int(first.split("-", 1)[0], 16)
         fd = os.open(f"/proc/{pid}/mem", os.O_RDONLY)
         try:

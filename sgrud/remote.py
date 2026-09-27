@@ -10,6 +10,7 @@ Requires the 3.15 API (thread status flags, GC stats, native frames).
 from __future__ import annotations
 
 import sys
+import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -202,6 +203,9 @@ def _translate_attach_error(pid: int, exc: BaseException) -> AttachError:
 #: its coroutine stack joined to the stacks of the tasks awaiting it.
 MODES = ("wall", "gil", "cpu", "exception", "async")
 
+#: Seconds before a failed attempt to open the GC rings is repeated.
+GC_RETRY = 5.0
+
 #: The unwinder mode behind each stack sampling mode. The unwinder drops
 #: the threads that do not match, so the choice of threads is made in C.
 #: ``async`` is not here: it reads the task graph through a ``wall``
@@ -322,7 +326,9 @@ class RemoteInspector:
         except (PermissionError, RuntimeError, OSError) as e:
             raise _translate_attach_error(pid, e) from e
         self._gc_monitor: Any = None
-        self._gc_error: str | None = None
+        # The last failure to open the GC rings and when, retried after
+        # GC_RETRY seconds rather than on every snapshot.
+        self._gc_error: tuple[str, float] | None = None
 
     def _guard(self, exc: BaseException) -> BaseException:
         """Turn a failure mid-read into ProcessExited if the target died."""
@@ -376,14 +382,18 @@ class RemoteInspector:
 
     def gc_records(self) -> tuple[GCRecord, ...]:
         """The raw contents of the target's GC history rings, empty slots dropped."""
-        if self._gc_error is not None:
-            raise RuntimeError(self._gc_error)
         if self._gc_monitor is None:
+            if self._gc_error is not None:
+                text, failed_at = self._gc_error
+                if time.monotonic() - failed_at < GC_RETRY:
+                    raise RuntimeError(text)
             try:
                 self._gc_monitor = _rd.GCMonitor(self.pid)
             except Exception as e:
-                self._gc_error = str(e)
+                # A target still starting up can fail this, so try again later.
+                self._gc_error = (str(e), time.monotonic())
                 raise self._guard(e) from e
+            self._gc_error = None
         try:
             raw = self._gc_monitor.get_gc_stats()
         except Exception as e:

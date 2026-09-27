@@ -116,7 +116,8 @@ class Hotspots:
     """Counts self and total samples per function, per thread.
 
     ``window`` limits aggregation to the last N seconds; None accumulates
-    until reset. Window history is discarded as samples age out.
+    until reset. Window history is discarded as samples age out, until
+    :meth:`freeze` stops the clock once no more samples will come.
     """
 
     def __init__(self, *, window: float | None = None) -> None:
@@ -128,7 +129,9 @@ class Hotspots:
         self._threads: dict[int, _ThreadCounts] = {}
         self.samples = 0
         self.started = time.monotonic()
+        self.first_sample_at: float | None = None
         self.last_sample_at: float | None = None
+        self._frozen_at: float | None = None
 
     def reset(self) -> None:
         with self._lock:
@@ -136,7 +139,21 @@ class Hotspots:
             self._history.clear()
             self.samples = 0
             self.started = time.monotonic()
-            self.last_sample_at = None
+            self.first_sample_at = self.last_sample_at = None
+            self._frozen_at = None
+
+    def freeze(self) -> None:
+        """Keep the window where it is: the sampler stopped for good.
+
+        Without this a window would go on expiring and a target that
+        exited would lose its last profile to the passing time.
+        """
+        with self._lock:
+            if self._frozen_at is None:
+                self._frozen_at = time.monotonic()
+
+    def _now(self) -> float:
+        return self._frozen_at if self._frozen_at is not None else time.monotonic()
 
     def add(self, stacks: Mapping[int, tuple[int, object, tuple[Frame, ...]]]) -> None:
         """Record one sample as :meth:`sgrud.remote.RawSample.stacks` returns it."""
@@ -161,6 +178,8 @@ class Hotspots:
             recorded: Counter[tuple[int, StackKey]] = Counter()
             self.samples += 1
             self.last_sample_at = time.monotonic()
+            if self.first_sample_at is None:
+                self.first_sample_at = self.last_sample_at
             for tid, frames in stacks:
                 if not frames:
                     continue
@@ -190,7 +209,7 @@ class Hotspots:
         """Remove expired samples while holding the lock, including idle reads."""
         if self.window is None:
             return
-        cutoff = time.monotonic() - self.window
+        cutoff = self._now() - self.window
         while self._history and self._history[0][0] <= cutoff:
             _, stacks = self._history.popleft()
             self.samples -= 1
@@ -211,14 +230,21 @@ class Hotspots:
             return sorted(self._threads)
 
     def rate(self) -> float:
-        """Achieved samples per second since the last reset."""
+        """Achieved samples per second, over the window or since the last reset.
+
+        Measured between the first and the last sample counted, so the
+        moment right after a reset does not divide by next to nothing.
+        """
         with self._lock:
             self._expire()
             if self.window is not None:
-                elapsed = min(time.monotonic() - self.started, self.window)
+                first = self._history[0][0] if self._history else None
             else:
-                elapsed = (self.last_sample_at or self.started) - self.started
-            return self.samples / elapsed if elapsed > 0 else 0.0
+                first = self.first_sample_at
+            if first is None or self.last_sample_at is None or self.samples < 2:
+                return 0.0
+            elapsed = self.last_sample_at - first
+            return (self.samples - 1) / elapsed if elapsed > 0 else 0.0
 
     def rows(
         self,
@@ -342,7 +368,7 @@ class Hotspots:
         """
         lines = []
         for tid, stacks in self._stacks(thread):
-            prefix = [] if thread is not None else [_thread_label(tid, names)]
+            prefix = [] if thread is not None else [_thread_label(tid, names).replace(";", ",")]
             for stack, count in sorted(stacks.items()):
                 parts = prefix + [_folded_frame(name, filename) for name, filename in stack]
                 lines.append(f"{';'.join(parts)} {count}")

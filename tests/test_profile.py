@@ -358,6 +358,7 @@ def test_window_expires_recursion_tasks_and_idle_samples(monkeypatch, window):
     hot.add_frames({1: (_f("old"), _f("old"))})
     now[0] += 1
     hot.add_stacks([(2, (_f("new"),)), (2, (_f("new"),))])
+    now[0] += 0.5
     hot.add_frames({})
     now[0] = 1000 + window
     rows = hot.rows()
@@ -366,8 +367,8 @@ def test_window_expires_recursion_tasks_and_idle_samples(monkeypatch, window):
     assert hot.thread_ids == [2]
     assert hot.call_tree().total == 2
     assert len(hot.folded()) == 1
-    assert hot.rate() == pytest.approx(2 / window)
-    now[0] += 1
+    assert hot.rate() == pytest.approx(1 / 0.5)
+    now[0] += 1.5
     assert hot.rows() == []
     assert hot.thread_ids == []
     assert hot.samples == 0

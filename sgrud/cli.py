@@ -117,7 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
     profile.add_argument(
         "-d", "--duration", type=float, default=5.0, help="seconds to sample for (default 5)"
     )
-    profile.add_argument("--rate", type=float, default=200.0, help="samples per second")
+    profile.add_argument("--rate", type=_positive, default=200.0, help="samples per second")
     profile.add_argument(
         "--sort", choices=("self", "total"), default="self", help="hotspot ordering"
     )
@@ -183,6 +183,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     probe.add_argument("--json", action="store_true", help="emit the result as JSON")
     return parser
+
+
+def _positive(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid number: {text!r}") from None
+    if not value > 0:
+        raise argparse.ArgumentTypeError(f"must be positive, got {text}")
+    return value
 
 
 def open_monitor(target: str, command: Sequence[str], **options) -> Monitor:
@@ -262,21 +272,15 @@ def _dump(args: argparse.Namespace) -> int:
 
 
 def _profile(args: argparse.Namespace) -> int:
-    from .export import Recorder
+    from .export import Recorder, check_output
     from .sampler import Sampler
 
     try:
-        recorders = []
         if args.output:
-            recorders.append(
-                Recorder(
-                    args.output,
-                    args.format,
-                    interval=1 / args.rate,
-                    mode=args.mode,
-                    baseline=args.baseline,
-                )
-            )
+            # Check the arguments before attaching, but create the file (the
+            # binary format truncates it at once) only once there is
+            # something to write, so a failed attach keeps an old recording.
+            check_output(args.output, args.format, mode=args.mode, baseline=args.baseline)
         monitor = open_monitor(
             args.target,
             args.command_argv,
@@ -293,6 +297,22 @@ def _profile(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
+        recorders = []
+        if args.output:
+            try:
+                recorders.append(
+                    Recorder(
+                        args.output,
+                        args.format,
+                        interval=1 / args.rate,
+                        mode=args.mode,
+                        baseline=args.baseline,
+                        opcodes=args.opcodes,
+                    )
+                )
+            except (SgrudError, OSError) as e:
+                print(f"sgrud: {e}", file=sys.stderr)
+                return 1
         sampler = Sampler(monitor, rate=args.rate, mode=args.mode, recorders=recorders)
         try:
             with sampler:
@@ -441,16 +461,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         argv.insert(0, "top")
     args = build_parser().parse_args(argv)
     args.command_argv = command_argv
-    if args.command == "top":
-        return _top(args)
-    if args.command == "dump":
-        return _dump(args)
-    if args.command == "profile":
-        return _profile(args)
-    if args.command == "probe":
-        return _probe(args)
-    build_parser().print_help()
-    return 2
+    handler = {"top": _top, "dump": _dump, "profile": _profile, "probe": _probe}.get(args.command)
+    if handler is None:
+        build_parser().print_help()
+        return 2
+    try:
+        return handler(args)
+    except KeyboardInterrupt:
+        # Ctrl-C while attaching, say. A spawned child is killed on the way.
+        return 130
 
 
 if __name__ == "__main__":

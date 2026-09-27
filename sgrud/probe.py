@@ -20,6 +20,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -75,7 +76,12 @@ try:
         json.dump(_out, _f)
     os.replace(RESULT + ".tmp", RESULT)
 except FileNotFoundError:
-    pass  # The caller timed out and removed its private directory.
+    pass  # The caller gave up and removed its private directory.
+# A caller that timed out left its directory for this script to read and
+# marked it abandoned, so removing it falls to the script.
+if os.path.exists(ABANDONED):
+    import shutil
+    shutil.rmtree(os.path.dirname(RESULT), ignore_errors=True)
 """
 
 
@@ -153,26 +159,40 @@ def probe(pid: int, *, types: int = 0, allocations: int = 10, timeout: float = 5
     """
     if not hasattr(sys, "remote_exec"):
         raise SgrudError("this Python has no sys.remote_exec, so it cannot probe")
-    directory = tempfile.TemporaryDirectory(prefix="sgrud-probe-")
-    result = os.path.join(directory.name, "result.json")
-    script = os.path.join(directory.name, "probe.py")
+    target_uid = None
+    if os.name == "posix":
+        try:
+            target_uid = psutil.Process(pid).uids().effective
+        except psutil.NoSuchProcess as e:
+            raise ProcessExited(pid) from e
+        except psutil.Error:
+            pass
+        if target_uid is not None and os.geteuid() not in (0, target_uid):
+            # Reading its memory may be allowed (CAP_SYS_PTRACE), but the
+            # target could not open the script in our private directory.
+            raise SgrudError(
+                f"cannot probe process {pid}: it runs as another user (uid {target_uid}), "
+                "probe it as that user or as root"
+            )
+    directory = tempfile.mkdtemp(prefix="sgrud-probe-")
+    result = os.path.join(directory, "result.json")
+    script = os.path.join(directory, "probe.py")
+    abandoned = os.path.join(directory, "abandoned")
     started = time.monotonic()
+    sent = answered = False
     try:
         with open(script, "x") as f:
             f.write(
-                f"TYPES = {int(types)}\nALLOCATIONS = {int(allocations)}\nRESULT = {result!r}\n"
+                f"TYPES = {int(types)}\nALLOCATIONS = {int(allocations)}\n"
+                f"RESULT = {result!r}\nABANDONED = {abandoned!r}\n"
             )
             f.write(_SCRIPT)
         # A root inspector may probe an unprivileged target (required on
         # macOS). Give that target access without opening the directory
         # to other users, even under a restrictive inspector umask.
-        if os.name == "posix" and os.geteuid() == 0:
-            try:
-                target_uid = psutil.Process(pid).uids().effective
-            except psutil.NoSuchProcess as e:
-                raise ProcessExited(pid) from e
+        if target_uid is not None and os.geteuid() == 0:
             os.chown(script, target_uid, -1)
-            os.chown(directory.name, target_uid, -1)
+            os.chown(directory, target_uid, -1)
         try:
             sys.remote_exec(pid, script)
         except ProcessLookupError as e:
@@ -186,6 +206,7 @@ def probe(pid: int, *, types: int = 0, allocations: int = 10, timeout: float = 5
             raise SgrudError(f"process {pid} refused the probe: {e}{hint}") from e
         except OSError as e:
             raise SgrudError(f"cannot probe process {pid}: {e}") from e
+        sent = True
         while not os.path.exists(result):
             if time.monotonic() - started > timeout:
                 raise SgrudError(
@@ -193,10 +214,11 @@ def probe(pid: int, *, types: int = 0, allocations: int = 10, timeout: float = 5
                     "thread may be blocked in C code, or it stopped responding."
                 )
             time.sleep(0.005)
+        answered = True
         with open(result) as f:
             data = json.load(f)
     finally:
-        directory.cleanup()
+        _release(directory, abandoned, result, pending=sent and not answered)
     if "error" in data:
         raise SgrudError(f"the probe failed inside process {pid}: {data['error']}")
     trace = data.get("tracemalloc") or {}
@@ -220,6 +242,27 @@ def probe(pid: int, *, types: int = 0, allocations: int = 10, timeout: float = 5
         tracemalloc_peak=trace.get("peak", 0),
         allocations=tuple(Allocation(*item) for item in trace.get("top", ())),
     )
+
+
+def _release(directory: str, abandoned: str, result: str, *, pending: bool) -> None:
+    """Remove the probe's directory, unless the target may still need it.
+
+    A target that was sent the script reads it whenever it gets there,
+    which may be after the caller gave up (a timeout, Ctrl-C). Then the
+    directory is left to the script, which removes it on finding the
+    ``abandoned`` mark. When the script has run already (the result is
+    there) the directory is the caller's again.
+    """
+    if pending:
+        try:
+            with open(abandoned, "x"):
+                pass
+        except OSError:
+            pass
+        else:
+            if not os.path.exists(result):
+                return
+    shutil.rmtree(directory, ignore_errors=True)
 
 
 def _triple(values: Any) -> tuple[int, int, int]:

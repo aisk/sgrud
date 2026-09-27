@@ -52,6 +52,32 @@ def guess_format(path: str) -> str:
         ) from None
 
 
+def check_output(
+    path: str, format: str | None = None, *, mode: str = "wall", baseline: str | None = None
+) -> str:
+    """The format a :class:`Recorder` would write, or SgrudError if it cannot.
+
+    Touches no file, so arguments can be checked before there is anything
+    to record.
+    """
+    format = format or guess_format(path)
+    if format not in FORMATS:
+        raise SgrudError(f"unknown format {format!r}, use one of {', '.join(FORMATS)}")
+    if format == "binary" and mode == "async":
+        raise SgrudError("the binary format holds thread stacks, not task stacks")
+    if baseline is not None:
+        if format != "flamegraph":
+            raise SgrudError("a baseline only makes sense for a flamegraph")
+        if not os.path.exists(baseline):
+            raise SgrudError(f"baseline {baseline!r} does not exist")
+    parent = os.path.dirname(os.path.abspath(path))
+    if not os.path.isdir(parent):
+        raise SgrudError(f"cannot write {path!r}: directory {parent!r} does not exist")
+    if not os.access(parent, os.W_OK):
+        raise SgrudError(f"cannot write {path!r}: directory {parent!r} is not writable")
+    return format
+
+
 class Recorder:
     """Feeds raw samples to one ``profiling.sampling`` collector.
 
@@ -59,7 +85,8 @@ class Recorder:
     formats use to turn counts into time. ``mode`` is the sampling mode
     the samples were taken in. ``baseline`` is a binary recording to
     compare against, which turns ``flamegraph`` into a differential one.
-    The binary format is written as samples arrive, the others on
+    ``opcodes`` says the samples carry opcodes, which gecko turns into
+    interval markers. The binary format is written as samples arrive, the others on
     :meth:`close`.
     """
 
@@ -71,21 +98,18 @@ class Recorder:
         interval: float,
         mode: str = "wall",
         baseline: str | None = None,
+        opcodes: bool = False,
     ):
         self.path = path
-        self.format = format or guess_format(path)
-        if self.format not in FORMATS:
-            raise SgrudError(f"unknown format {self.format!r}, use one of {', '.join(FORMATS)}")
-        if self.format == "binary" and mode == "async":
-            raise SgrudError("the binary format holds thread stacks, not task stacks")
-        if baseline is not None and self.format != "flamegraph":
-            raise SgrudError("a baseline only makes sense for a flamegraph")
+        self.format = check_output(path, format, mode=mode, baseline=baseline)
         self.mode = mode
         self.interval = interval
         self.samples = 0
         self.failed = 0
         self.started = time.monotonic()
-        self._collector = _make_collector(self.format, path, interval, baseline)
+        self._collector = _make_collector(
+            self.format, path, interval, baseline, mode=mode, opcodes=opcodes
+        )
 
     def collect(self, sample: RawSample) -> None:
         if sample.mode != self.mode:
@@ -103,15 +127,13 @@ class Recorder:
         rate = self.samples / elapsed if elapsed > 0 else 0.0
         attempts = self.samples + self.failed
         if hasattr(self._collector, "set_stats"):
-            names = _stdlib("constants", "PROFILING_MODE_NAMES")
-            modes = {name: value for value, name in names.items()}
             self._collector.set_stats(
                 int(self.interval * 1_000_000),
                 elapsed,
                 rate,
                 100.0 * self.failed / attempts if attempts else 0.0,
                 max(0.0, 100.0 * (1 - self.samples * self.interval / elapsed)) if elapsed else 0.0,
-                mode=modes.get(self.mode, modes["wall"]),
+                mode=_mode_value(self.mode),
             )
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             self._collector.export(None if self.format == "binary" else self.path)
@@ -132,14 +154,25 @@ _COLLECTORS = {
 }
 
 
-def _make_collector(format: str, path: str, interval: float, baseline: str | None) -> Any:
+def _mode_value(mode: str) -> int:
+    """The ``profiling.sampling`` constant for a sampling mode, wall if it has none."""
+    names = _stdlib("constants", "PROFILING_MODE_NAMES")
+    modes = {name: value for value, name in names.items()}
+    return modes.get(mode, modes["wall"])
+
+
+def _make_collector(
+    format: str, path: str, interval: float, baseline: str | None, *, mode: str, opcodes: bool
+) -> Any:
     usec = max(int(interval * 1_000_000), 1)
     if format == "binary":
         return _stdlib("binary_collector", "BinaryCollector")(path, usec)
     if baseline is not None:
-        if not os.path.exists(baseline):
-            raise SgrudError(f"baseline {baseline!r} does not exist")
         cls = _stdlib("stack_collector", "DiffFlamegraphCollector")
         return cls(usec, baseline_binary_path=baseline)
     module, name = _COLLECTORS[format]
+    if format == "gecko":
+        return _stdlib(module, name)(usec, opcodes=opcodes)
+    if format == "jsonl":
+        return _stdlib(module, name)(usec, mode=_mode_value(mode))
     return _stdlib(module, name)(usec)

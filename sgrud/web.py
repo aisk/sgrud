@@ -100,6 +100,8 @@ def serve(monitor: Monitor, args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     shown = "localhost" if args.host in WILDCARD_HOSTS else args.host
+    if ":" in shown:
+        shown = f"[{shown}]"  # an IPv6 address
     server = _Server(
         _shell_join(web_command(args, monitor.pid)),
         host=args.host,

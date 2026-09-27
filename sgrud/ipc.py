@@ -284,13 +284,16 @@ def _with_connections(files: list[OpenFile], conns: Iterable[Any]) -> list[OpenF
 
     Sockets psutil knows that are not in ``files`` yet are added, which
     is every socket on macOS and Windows. Windows has no descriptor
-    numbers at all, so its entries carry fd -1.
+    numbers at all, so its entries carry fd -1. On Linux ``files`` already
+    holds every socket descriptor (up to :data:`MAX_FILES`), so one that
+    is missing is past the cap or closed since the (cached) list was
+    taken, and is left out.
     """
     by_fd: dict[int, int] = {f.fd: i for i, f in enumerate(files) if f.fd >= 0}
     out = list(files)
     for c in conns:
         fd = -1 if c.fd is None else c.fd
-        if fd < 0 and LINUX:
+        if LINUX and (fd not in by_fd or files[by_fd[fd]].kind != "socket"):
             continue
         family = _family(c.family, c.type)
         local, remote = _addr(c.laddr), _addr(c.raddr)
@@ -476,11 +479,17 @@ def read_ipc(
         )
     try:
         num_fds = proc.num_handles() if WINDOWS else proc.num_fds()
+    except psutil.NoSuchProcess as e:
+        raise ProcessLookupError(pid) from e
+    except psutil.Error, OSError:
+        num_fds = 0
+    try:
+        # Denied more often than the count, for an elevated process say.
         opened = proc.open_files()
     except psutil.NoSuchProcess as e:
         raise ProcessLookupError(pid) from e
     except psutil.Error, OSError:
-        num_fds, opened = 0, []
+        opened = []
     files = [
         OpenFile(fd=-1 if item.fd is None else item.fd, kind="file", target=item.path)
         for item in opened

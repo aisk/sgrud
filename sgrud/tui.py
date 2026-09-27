@@ -15,6 +15,7 @@ from collections import deque
 from collections.abc import Hashable
 from dataclasses import dataclass
 
+import psutil
 from rich.console import Group
 from rich.table import Table
 from rich.text import Text
@@ -61,6 +62,16 @@ from .sampler import Sampler
 HISTORY = 120
 
 Path = tuple[Hashable, ...]
+
+
+def _banner_text(limited: str | None) -> Text:
+    if limited is None:
+        return Text("")
+    return Text.assemble(
+        ("LIMITED MODE  ", "bold"),
+        "stacks, tasks, GC and hotspots are unavailable: ",
+        limited,
+    )
 
 
 def _status_text(status: ThreadStatus) -> Text:
@@ -548,7 +559,8 @@ class SgrudApp(App[int]):
             )
         self.hot_sort = "self"
         self.hot_thread: int | None = None
-        self._hot_options: tuple[int, ...] = ()
+        # None forces the next snapshot to rebuild the thread filters.
+        self._hot_options: tuple[int, ...] | None = None
         self.interval = interval
         self.sections = dict(stacks=stacks, tasks=tasks, gc=gc, children=children, ipc=ipc)
         self.paused = False
@@ -573,16 +585,8 @@ class SgrudApp(App[int]):
 
     def compose(self) -> ComposeResult:
         yield Summary(id="summary")
-        banner = Static("", id="banner")
+        banner = Static(_banner_text(self.monitor.limited), id="banner")
         banner.display = self.monitor.limited is not None
-        if self.monitor.limited is not None:
-            banner.update(
-                Text.assemble(
-                    ("LIMITED MODE  ", "bold"),
-                    "stacks, tasks, GC and hotspots are unavailable: ",
-                    self.monitor.limited,
-                )
-            )
         yield banner
         with TabbedContent(id="tabs"):
             with TabPane("Threads", id="threads"):
@@ -786,6 +790,9 @@ class SgrudApp(App[int]):
             result = self.monitor.probe(types=8)
         except SgrudError as e:
             self.call_from_thread(self._show_probe, None, str(e))
+        except Exception as e:
+            # Anything else would take the app down with _probing stuck.
+            self.call_from_thread(self._show_probe, None, f"{type(e).__name__}: {e}")
         else:
             self.call_from_thread(self._show_probe, result, None)
 
@@ -862,7 +869,7 @@ class SgrudApp(App[int]):
                 opcodes=opts["opcodes"],
             )
             snap = monitor.snapshot(**self.sections)
-        except (SgrudError, OSError) as exc:
+        except (SgrudError, OSError, psutil.Error) as exc:
             if monitor is not None:
                 monitor.close(kill_child=False)
             self.notify(str(exc), severity="error")
@@ -874,9 +881,10 @@ class SgrudApp(App[int]):
         if not self._parents or not self._can_switch_process():
             return
         parent = self._parents[-1]
+        parent.reset_rates()
         try:
             snap = parent.snapshot(**self.sections)
-        except (SgrudError, OSError) as exc:
+        except (SgrudError, OSError, psutil.Error) as exc:
             self.notify(str(exc), severity="error")
             return
         previous = self.monitor
@@ -897,7 +905,7 @@ class SgrudApp(App[int]):
         self.exited = None
         self.paused = False
         self.hot_thread = None
-        self._hot_options = ()
+        self._hot_options = None
         self._selected_tid = self._selected_task = None
         self._last_thread = self._last_task = None
         self.probe_result = None
@@ -912,9 +920,15 @@ class SgrudApp(App[int]):
             history.clear()
         self.query_one("#thread-stack", StackPanel).show("", ())
         self.query_one("#task-stack", StackPanel).show("", ())
+        # Rows of another process: drop them with their cursor, which would
+        # otherwise sit on whatever the new process has in that row.
+        self.query_one("#threads-table", DataTable).clear()
+        tree = self.query_one("#tasks-tree", Tree)
+        tree.clear()
+        tree.cursor_line = -1
         banner = self.query_one("#banner", Static)
         banner.display = monitor.limited is not None
-        banner.update(Text(monitor.limited or ""))
+        banner.update(_banner_text(monitor.limited))
         self.query_one(FlameGraph).set_tree(CallNode("all threads", "", None))
         self.apply_snapshot(snap)
         self._set_interval(self.interval)
@@ -971,6 +985,7 @@ class SgrudApp(App[int]):
             self._timer = None
         if self.sampler is not None:
             self.sampler.stop()
+        self.hotspots.freeze()
         self.notify(str(exc), severity="warning", timeout=10)
         self._update_summary()
         self._show_thread(None)
@@ -1153,7 +1168,9 @@ class SgrudApp(App[int]):
         for t in snap.collecting:
             info.append(f"  COLLECTING in {t.name or t.tid}", "bold red")
         info.append("\n")
-        if self.sampler is None:
+        if self.monitor.limited is not None:
+            info.append("trigger sites need access to the target's memory", "dim")
+        elif self.sampler is None:
             info.append("trigger sites need the sampler (--rate)", "dim")
         else:
             gc_samples, samples, sites = self.hotspots.gc_sites(limit=4)

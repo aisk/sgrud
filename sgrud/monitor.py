@@ -9,7 +9,7 @@ from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, replace
 
 from . import osproc
-from .errors import AttachError, ProcessExited
+from .errors import AttachError, ProcessExited, SgrudError
 from .ipc import decode_syscall
 from .models import (
     IPC,
@@ -90,6 +90,9 @@ class _GCTracker:
         self.limit = limit
         self._records: dict[int, dict[int, GCRecord]] = {}
         self._prev: dict[int, _RateSample] = {}
+
+    def reset_rates(self) -> None:
+        self._prev.clear()
 
     def update(
         self, records: Iterable[GCRecord], *, now: float, now_ns: int
@@ -255,13 +258,29 @@ class Monitor:
         launcher (a Windows venv's ``python.exe``) its interpreter child
         is attached instead, while the launcher stays :attr:`child`.
         """
-        child = subprocess.Popen(list(argv))
+        try:
+            child = subprocess.Popen(list(argv))
+        except OSError as e:
+            raise SgrudError(f"cannot start {argv[0]!r}: {e.strerror or e}") from e
+        try:
+            return cls._attach_child(child, settle, options)
+        except BaseException:
+            # Whatever went wrong, including Ctrl-C, the child must not
+            # outlive a monitor that never came to be.
+            if child.poll() is None:
+                child.kill()
+            child.wait()
+            raise
+
+    @classmethod
+    def _attach_child(cls, child: subprocess.Popen[bytes], settle: float, options: dict) -> Monitor:
         deadline = time.monotonic() + max(settle, 0.05) + 5.0
         time.sleep(settle)
         last: Exception | None = None
         while time.monotonic() < deadline:
             if child.poll() is not None:
                 raise ProcessExited(child.pid, child.returncode)
+            monitor = None
             try:
                 target = interpreter_pid(child.pid)
                 if target is None:
@@ -270,9 +289,16 @@ class Monitor:
                 monitor._get_inspector()
                 return monitor
             except AttachError as e:
+                if monitor is not None:
+                    monitor.close(kill_child=False)
+                if not e.transient:
+                    raise
                 last = e
-                time.sleep(0.05)
-        child.kill()
+            except ProcessExited as e:
+                # A launcher's interpreter child that is gone again. The
+                # launcher's own exit is caught by poll() above.
+                last = e
+            time.sleep(0.05)
         raise last or AttachError(child.pid, "timed out waiting for the interpreter")
 
     # -- lifecycle -----------------------------------------------------
@@ -353,6 +379,21 @@ class Monitor:
         with self._lock:
             inspector = self._inspectors.get(unwinder_mode(mode))
             return inspector.stats() if inspector is not None else {}
+
+    def reset_rates(self) -> None:
+        """Forget the previous readings that rates are computed against.
+
+        For a monitor that was left alone for a while: its next snapshot
+        would otherwise average CPU, fault and GC rates over the whole gap.
+        That snapshot then has no rates, like the first one.
+        """
+        with self._lock:
+            self._proc_cpu = None
+            self._thread_cpu.clear()
+            self._child_cpu.clear()
+            self._faults = None
+            self._throttle = None
+            self._gc.reset_rates()
 
     def _check_alive(self) -> None:
         if self._child is not None and self._child.poll() is not None:
