@@ -219,7 +219,7 @@ async def test_tui_hotspots_tab(monitor, tmp_path):
         await pilot.pause()
         assert app.hotspots.samples < before / 2
         await pilot.press("m")
-        assert app.sample_mode == "wall" and app.sampler.mode == "wall"
+        assert app.sample_mode == "cpu" and app.sampler.mode == "cpu"
         await pilot.press("q")
     assert not app.sampler.running
     # The recording keeps its mode and is closed on exit.
@@ -292,7 +292,7 @@ async def test_mode_switch_without_recording(monitor):
     async with app.run_test() as pilot:
         await pilot.press("5", "m")
         assert app.sampler is not None
-        assert app.sample_mode == app.sampler.mode == "gil"
+        assert app.sample_mode == app.sampler.mode == "wall"
 
 
 async def test_hotspot_window_controls_share_sampler(monitor):

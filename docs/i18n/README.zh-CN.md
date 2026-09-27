@@ -16,7 +16,7 @@ sgrud 从不暂停或插桩目标进程。它通过 CPython 3.15 的 `_remote_de
 - **Threads**：每个线程的状态、CPU 占比、实时 Python 调用栈，在 Linux 上还有它阻塞在哪个系统调用上。
 - **Tasks**：asyncio 任务树，每个任务附带它停留的协程帧。
 - **GC**：回收占用的时间、回收速率、被追踪的对象数、回收历史以及触发回收的函数。
-- **Hotspots** 和 **Flame**：后台采样分析器，支持 wall、GIL、CPU、异常和 asyncio 任务模式，以表格或火焰图展示。
+- **Hotspots** 和 **Flame**：后台采样分析器，支持 CPU、wall、GIL、异常和 asyncio 任务模式，以表格或火焰图展示。
 - **IPC**：打开的描述符、管道及其另一端的持有者、socket、共享内存和文件锁，给挂住的进程准备。
 - `sgrud dump` 以文本或 JSON 输出同样的内容，`sgrud profile` 采样一段时间并写出任意 Tachyon 格式，`sgrud probe` 向目标询问仅靠读内存无法得到的信息。`--web` 把界面提供给浏览器。
 - `Monitor` 类返回普通的 dataclass，因此这一切都可以作为库使用。

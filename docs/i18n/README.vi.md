@@ -16,7 +16,7 @@ sgrud không bao giờ dừng hay chèn mã vào tiến trình đích. Nó đọ
 - **Threads**: mọi thread với trạng thái, phần CPU, stack Python đang chạy và, trên Linux, system call mà nó đang bị chặn.
 - **Tasks**: cây task asyncio, mỗi task kèm các frame coroutine nó đang dừng.
 - **GC**: thời gian dành cho thu gom, tốc độ thu gom, số đối tượng đang được theo dõi, lịch sử các lần thu gom và các hàm đã kích hoạt chúng.
-- **Hotspots** và **Flame**: một profiler lấy mẫu chạy nền với các chế độ wall, GIL, CPU, exception và task asyncio, hiển thị dưới dạng bảng hoặc biểu đồ flame.
+- **Hotspots** và **Flame**: một profiler lấy mẫu chạy nền với các chế độ CPU, wall, GIL, exception và task asyncio, hiển thị dưới dạng bảng hoặc biểu đồ flame.
 - **IPC**: các descriptor đang mở, pipe và ai đang giữ đầu bên kia, socket, bộ nhớ chia sẻ và khóa tệp, dành cho tiến trình bị treo.
 - `sgrud dump` in ra cùng nội dung đó dưới dạng văn bản hoặc JSON, `sgrud profile` lấy mẫu trong một khoảng thời gian rồi ghi ra bất kỳ định dạng Tachyon nào, còn `sgrud probe` hỏi mục tiêu những gì chỉ đọc bộ nhớ không thể cho thấy. `--web` đưa giao diện lên trình duyệt.
 - Một lớp `Monitor` trả về các dataclass thuần túy, nên tất cả đều dùng được dưới dạng thư viện.

@@ -193,15 +193,16 @@ def _translate_attach_error(pid: int, exc: BaseException) -> AttachError:
 
 #: The sampling modes, in the order the TUI cycles through them.
 #:
-#: ``wall`` counts every thread that has a Python stack. ``gil`` counts only
-#: the thread holding the GIL, which is where CPU time goes in CPython.
-#: ``cpu`` counts threads the OS has on a core, so C code that released the
-#: GIL still counts and a thread waiting for the GIL does not.
+#: ``cpu``, the default, counts threads the OS has on a core, so C code
+#: that released the GIL still counts and a thread waiting for the GIL does
+#: not. ``wall`` counts every thread that has a Python stack, idle or not.
+#: ``gil`` counts only the thread holding the GIL, which is where CPU time
+#: goes in CPython.
 #: ``exception`` counts only threads handling an exception, to show where
 #: exceptions are raised and caught. ``async`` samples asyncio tasks
 #: instead of threads: every task counts, suspended ones included, with
 #: its coroutine stack joined to the stacks of the tasks awaiting it.
-MODES = ("wall", "gil", "cpu", "exception", "async")
+MODES = ("cpu", "wall", "gil", "exception", "async")
 
 #: Seconds before a failed attempt to open the GC rings is repeated.
 GC_RETRY = 5.0

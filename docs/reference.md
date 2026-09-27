@@ -90,9 +90,9 @@ This is the one command that touches the target, see [Probing](#probing).
 
 ## Sampling modes
 
-- **wall**: every thread with a Python stack counts, so a sleeping thread weighs as much as a busy one.
-- **gil**: only the GIL holder counts. This answers "where does the CPU go".
-- **cpu**: only threads the OS has on a core count, so C code that released the GIL still counts and a thread waiting for the GIL does not.
+- **cpu** (default): only threads the OS has on a core count, so C code that released the GIL still counts and a thread waiting for the GIL does not. This answers "where does the CPU go".
+- **wall**: every thread with a Python stack counts, so a sleeping thread weighs as much as a busy one. This answers "where does the time go", waits included, which is what to look at when something is slow but not busy.
+- **gil**: only the GIL holder counts, which shows where the time spent running Python code goes.
 - **exception**: only threads handling an exception count, which shows where exceptions are raised and how far they travel before being caught.
 - **async**: samples asyncio tasks instead of thread stacks, since a coroutine parked in an `await` is on no thread's stack. Each leaf task becomes one stack: its own frames, a `<task NAME>` marker, then the frames of each task awaiting it up to the root. Every task counts, running or suspended, so this answers "what are my tasks waiting on". It is slower per sample than reading a stack, so expect a lower achieved rate.
 

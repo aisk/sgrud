@@ -34,7 +34,7 @@ class Sampler:
         hotspots: Hotspots | None = None,
         *,
         rate: float = 100.0,
-        mode: str = "wall",
+        mode: str = "cpu",
         recorders: Iterable[Recorder] = (),
     ):
         if rate <= 0:

@@ -271,9 +271,10 @@ def test_recorders_write_every_format(monitor, tmp_path):
         "jsonl": tmp_path / "j.jsonl",
         "heatmap": tmp_path / "heat",
     }
-    recorders = [Recorder(str(path), interval=1 / 200) for path in paths.values()]
+    # Wall mode, so every sample has at least one thread stack to write.
+    recorders = [Recorder(str(path), interval=1 / 200, mode="wall") for path in paths.values()]
     assert [r.format for r in recorders] == list(paths)
-    with Sampler(monitor, rate=200, recorders=recorders) as sampler:
+    with Sampler(monitor, rate=200, mode="wall", recorders=recorders) as sampler:
         time.sleep(0.5)
     sampler.close()
     assert sampler.recorders == []

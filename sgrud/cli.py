@@ -57,9 +57,9 @@ def _add_mode(parser: argparse.ArgumentParser, help: str) -> None:
     parser.add_argument(
         "--mode",
         choices=MODES,
-        default="wall",
-        help=help + ": every thread (wall), the GIL holder (gil), threads on a core (cpu), "
-        "threads handling an exception (exception) or asyncio tasks (async)",
+        default="cpu",
+        help=help + ": threads on a core (cpu, default), every thread (wall), "
+        "the GIL holder (gil), threads handling an exception (exception) or asyncio tasks (async)",
     )
 
 

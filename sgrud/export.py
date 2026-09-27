@@ -53,7 +53,7 @@ def guess_format(path: str) -> str:
 
 
 def check_output(
-    path: str, format: str | None = None, *, mode: str = "wall", baseline: str | None = None
+    path: str, format: str | None = None, *, mode: str = "cpu", baseline: str | None = None
 ) -> str:
     """The format a :class:`Recorder` would write, or SgrudError if it cannot.
 
@@ -96,7 +96,7 @@ class Recorder:
         format: str | None = None,
         *,
         interval: float,
-        mode: str = "wall",
+        mode: str = "cpu",
         baseline: str | None = None,
         opcodes: bool = False,
     ):

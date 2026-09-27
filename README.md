@@ -18,7 +18,7 @@ sgrud never stops or instruments the target. It reads interpreter state straight
 - **Threads**: every thread with its state, CPU share, live Python stack and, on Linux, the system call it is blocked in.
 - **Tasks**: the asyncio task tree, each task with the coroutine frames it is parked in.
 - **GC**: time spent collecting, collection rate, tracked objects, a history of collections and the functions that triggered them.
-- **Hotspots** and **Flame**: a background sampling profiler with wall, GIL, CPU, exception and asyncio task modes, shown as a table or a flame graph, cumulatively or over the last 30 seconds / 5 minutes.
+- **Hotspots** and **Flame**: a background sampling profiler with CPU, wall, GIL, exception and asyncio task modes, shown as a table or a flame graph, cumulatively or over the last 30 seconds / 5 minutes.
 - **IPC**: open descriptors, pipes and who holds their other ends, sockets, shared memory and file locks, for the process that hangs.
 - `sgrud dump` prints the same as text or JSON, `sgrud profile` samples for a while and writes any Tachyon format, and `sgrud probe` asks the target for what memory alone cannot show. `--web` serves the interface to a browser.
 - A `Monitor` class that returns plain dataclasses, so all of it is available as a library.

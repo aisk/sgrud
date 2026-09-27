@@ -334,7 +334,7 @@ class Monitor:
                 self._inspectors[key] = inspector
             return inspector
 
-    def sample(self, mode: str = "wall", *, retries: int = 5) -> RawSample:
+    def sample(self, mode: str = "cpu", *, retries: int = 5) -> RawSample:
         """One read of the stacks (or, in ``async`` mode, the tasks), unconverted.
 
         This is what a profiler wants to call hundreds of times per second.

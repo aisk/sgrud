@@ -370,7 +370,7 @@ def format_read_stats(stats: Mapping[str, int | float]) -> str:
 
 
 def format_hotspots(
-    rows, *, samples: int, rate: float | None = None, mode: str = "wall", limit: int = 25
+    rows, *, samples: int, rate: float | None = None, mode: str = "cpu", limit: int = 25
 ) -> str:
     """Render hotspot rows (see :meth:`sgrud.profile.Hotspots.rows`) as a table."""
     head = f"hotspots ({mode}): {samples} samples"

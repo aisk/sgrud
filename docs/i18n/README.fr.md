@@ -16,7 +16,7 @@ sgrud n'arrête ni n'instrumente jamais la cible. Il lit l'état de l'interprét
 - **Threads** : chaque thread avec son état, sa part de CPU, sa pile Python en direct et, sous Linux, l'appel système dans lequel il est bloqué.
 - **Tasks** : l'arbre des tâches asyncio, chaque tâche avec les frames de coroutine où elle est arrêtée.
 - **GC** : le temps passé à collecter, le rythme des collectes, les objets suivis, un historique des collectes et les fonctions qui les ont déclenchées.
-- **Hotspots** et **Flame** : un profileur par échantillonnage en arrière-plan avec les modes wall, GIL, CPU, exception et tâches asyncio, affiché en tableau ou en graphe en flammes.
+- **Hotspots** et **Flame** : un profileur par échantillonnage en arrière-plan avec les modes CPU, wall, GIL, exception et tâches asyncio, affiché en tableau ou en graphe en flammes.
 - **IPC** : les descripteurs ouverts, les tubes et qui tient leur autre extrémité, les sockets, la mémoire partagée et les verrous de fichier, pour le processus qui se bloque.
 - `sgrud dump` affiche la même chose en texte ou en JSON, `sgrud profile` échantillonne pendant un moment et écrit n'importe quel format Tachyon, et `sgrud probe` demande à la cible ce que la mémoire seule ne peut pas montrer. `--web` sert l'interface dans un navigateur.
 - Une classe `Monitor` qui renvoie de simples dataclasses, de sorte que tout cela est disponible en bibliothèque.

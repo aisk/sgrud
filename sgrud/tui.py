@@ -536,7 +536,7 @@ class SgrudApp(App[int]):
         children: bool = True,
         ipc: bool = True,
         sample_rate: float = 100.0,
-        sample_mode: str = "wall",
+        sample_mode: str = "cpu",
         record: str | None = None,
     ):
         """``record`` is a path for a binary recording of every sample taken."""
