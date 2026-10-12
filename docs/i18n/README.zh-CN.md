@@ -6,9 +6,9 @@ sgrud（源自苏格兰盖尔语 *sgrùd*，意为“检视”或“审查”）
 
 sgrud 从不暂停或插桩目标进程。它通过 CPython 3.15 的 `_remote_debugging` 模块（Tachyon 性能分析器和 `python -m asyncio ps` 背后的机制）直接从进程内存中读取解释器状态，并通过 psutil 结合操作系统提供的内存、CPU、线程和打开文件的信息。抓取一次所有线程的调用栈只需几十微秒，目标进程侧则没有任何开销。
 
-![Threads 标签页，显示每个线程的状态、CPU 占用和当前 Python 调用栈](https://github.com/user-attachments/assets/5a6bf1a3-fddb-48fe-9aa6-18c76f751ef7)
+![sgrud 检查 examples/demo_app.py 时各标签页的演示](https://raw.githubusercontent.com/aisk/sgrud/main/docs/demo.gif)
 
-*Threads 标签页：每个线程的状态、CPU 占比和实时 Python 调用栈。*
+*以 `examples/demo_app.py` 为目标依次浏览各标签页，包括线程、asyncio 任务、GC、子进程、热点、火焰图和 IPC。*
 
 ## 功能
 

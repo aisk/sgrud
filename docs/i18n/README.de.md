@@ -6,9 +6,9 @@ sgrud (vom schottisch-gälischen *sgrùd*, was „Prüfung“ oder „Untersuchu
 
 sgrud hält das Ziel nie an und instrumentiert es nicht. Es liest den Interpreterzustand direkt aus dem Prozessspeicher über das Modul `_remote_debugging` von CPython 3.15 (die Mechanik hinter dem Tachyon-Profiler und `python -m asyncio ps`) und kombiniert das mit dem, was das Betriebssystem über psutil zu Speicher, CPU, Threads und offenen Dateien meldet. Ein Schnappschuss der Stacks aller Threads kostet einige Dutzend Mikrosekunden und auf der Zielseite gar nichts.
 
-![Der Threads-Tab mit Zustand, CPU-Auslastung und aktuellem Python-Stack jedes Threads](https://github.com/user-attachments/assets/5a6bf1a3-fddb-48fe-9aa6-18c76f751ef7)
+![Ein Rundgang durch die Tabs von sgrud bei der Untersuchung von examples/demo_app.py](https://raw.githubusercontent.com/aisk/sgrud/main/docs/demo.gif)
 
-*Der Threads-Tab: jeder Thread mit Zustand, CPU-Anteil und aktuellem Python-Stack.*
+*Ein Rundgang durch die Tabs mit `examples/demo_app.py` als Ziel: Threads, asyncio-Tasks, GC, Kindprozesse, Hotspots, Flame-Graph und IPC.*
 
 ## Funktionen
 

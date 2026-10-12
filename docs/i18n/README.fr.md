@@ -6,9 +6,9 @@ sgrud (du gaélique écossais *sgrùd*, qui signifie « inspection » ou « exam
 
 sgrud n'arrête ni n'instrumente jamais la cible. Il lit l'état de l'interpréteur directement dans la mémoire du processus grâce au module `_remote_debugging` de CPython 3.15 (la mécanique derrière le profileur Tachyon et `python -m asyncio ps`) et le combine avec ce que le système rapporte via psutil sur la mémoire, le CPU, les threads et les fichiers ouverts. Un instantané de la pile de chaque thread coûte quelques dizaines de microsecondes, et rien du côté de la cible.
 
-![L'onglet Threads, montrant l'état, l'utilisation CPU et la pile Python courante de chaque thread](https://github.com/user-attachments/assets/5a6bf1a3-fddb-48fe-9aa6-18c76f751ef7)
+![Un tour des onglets de sgrud pendant l'inspection de examples/demo_app.py](https://raw.githubusercontent.com/aisk/sgrud/main/docs/demo.gif)
 
-*L'onglet Threads : chaque thread avec son état, sa part de CPU et sa pile Python en direct.*
+*Un tour des onglets avec `examples/demo_app.py` comme cible : threads, tâches asyncio, GC, processus enfants, points chauds, flame graph et IPC.*
 
 ## Fonctionnalités
 

@@ -6,9 +6,9 @@ sgrud(스코틀랜드 게일어 *sgrùd*에서 유래했으며 "검사(檢査)" 
 
 sgrud는 대상을 멈추거나 계측 코드를 주입하지 않습니다. CPython 3.15의 `_remote_debugging` 모듈(Tachyon 프로파일러와 `python -m asyncio ps`의 기반이 되는 장치)을 통해 프로세스 메모리에서 인터프리터 상태를 직접 읽어 오고, 메모리, CPU, 스레드, 열린 파일에 대해 OS가 psutil을 통해 보고하는 정보를 함께 사용합니다. 모든 스레드의 스택을 한 번 스냅샷하는 데 수십 마이크로초가 들며 대상 쪽에는 아무런 비용이 없습니다.
 
-![Threads 탭. 각 스레드의 상태, CPU 사용량, 현재 Python 스택을 표시](https://github.com/user-attachments/assets/5a6bf1a3-fddb-48fe-9aa6-18c76f751ef7)
+![examples/demo_app.py를 대상으로 한 sgrud 각 탭의 데모](https://raw.githubusercontent.com/aisk/sgrud/main/docs/demo.gif)
 
-*Threads 탭: 각 스레드의 상태, CPU 점유율, 실시간 Python 스택.*
+*`examples/demo_app.py`를 대상으로 각 탭을 차례로 살펴봅니다. 스레드, asyncio 태스크, GC, 자식 프로세스, 핫스팟, 플레임 그래프, IPC.*
 
 ## 기능
 

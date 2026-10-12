@@ -6,9 +6,9 @@ sgrud (bắt nguồn từ tiếng Gael Scotland *sgrùd*, nghĩa là "kiểm tra
 
 sgrud không bao giờ dừng hay chèn mã vào tiến trình đích. Nó đọc trạng thái của trình thông dịch trực tiếp từ bộ nhớ tiến trình thông qua module `_remote_debugging` của CPython 3.15 (cơ chế đứng sau profiler Tachyon và `python -m asyncio ps`) và kết hợp với những gì hệ điều hành báo cáo qua psutil về bộ nhớ, CPU, thread và các tệp đang mở. Một ảnh chụp stack của mọi thread chỉ tốn vài chục micro giây và không tốn gì ở phía tiến trình đích.
 
-![Tab Threads, hiển thị trạng thái, mức dùng CPU và stack Python hiện tại của từng thread](https://github.com/user-attachments/assets/5a6bf1a3-fddb-48fe-9aa6-18c76f751ef7)
+![Lướt qua các tab của sgrud khi kiểm tra examples/demo_app.py](https://raw.githubusercontent.com/aisk/sgrud/main/docs/demo.gif)
 
-*Tab Threads: mỗi thread với trạng thái, phần CPU và stack Python đang chạy.*
+*Lướt qua các tab với `examples/demo_app.py` làm mục tiêu: thread, task asyncio, GC, tiến trình con, hotspot, flame graph và IPC.*
 
 ## Tính năng
 
